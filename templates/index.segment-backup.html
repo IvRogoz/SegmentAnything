@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SegmentAnything 3D</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #111; color: #eee; min-height: 100vh; overflow: hidden; }
+#app { display: flex; height: 100vh; flex-direction: column; }
+
+/* Top bar */
+#topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 20px; background: #1a1a1a; border-bottom: 1px solid #2a2a2a;
+    z-index: 10;
+}
+#topbar h1 { font-size: 1em; color: #fff; white-space: nowrap; }
+#topbar h1 small { font-weight: normal; font-size: 0.65em; color: #666; }
+
+#uploadBtn {
+    padding: 8px 18px; background: #4a9eff; color: #fff; border: none;
+    border-radius: 6px; cursor: pointer; font-size: 0.85em; white-space: nowrap;
+}
+#uploadBtn:hover { background: #3a8eef; }
+#addLayerBtn { padding: 8px 12px; background: #2b2b2b; color: #ddd; border: 1px solid #484848; border-radius: 6px; cursor: pointer; font-size: .82em; }
+#addLayerBtn:disabled { opacity: .4; cursor: not-allowed; }
+
+#modeSelect {
+    padding: 7px 9px; background: #252525; color: #ddd; border: 1px solid #3a3a3a;
+    border-radius: 6px; font-size: 0.82em; cursor: pointer;
+}
+
+#status {
+    font-size: 0.8em; color: #888;
+    margin-left: auto; white-space: nowrap;
+}
+
+#errorMsg {
+    font-size: 0.8em; color: #e04848;
+    margin-left: auto; white-space: nowrap;
+}
+
+#content { flex: 1; display: flex; position: relative; }
+
+/* 3D canvas container */
+#canvas-container {
+    flex: 1;
+    position: relative;
+    background: #0a0a0a;
+}
+
+/* Object list panel */
+#objectPanel {
+    width: 260px;
+    background: #161616;
+    border-left: 1px solid #2a2a2a;
+    padding: 12px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+#objectPanel h2 { font-size: 0.8em; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.control-group { border-top: 1px solid #303030; padding-top: 12px; margin-top: 8px; }
+.control-group > label { display: block; font-size: .78em; color: #aaa; margin-bottom: 8px; }
+#addRefLayer { width: 100%; margin-top: 8px; padding: 8px; background: #292929; border: 1px solid #4a4a4a; border-radius: 5px; color: #ddd; cursor: pointer; }
+#addRefLayer:hover { border-color: #4a9eff; }
+#sidebarUpload { width: 100%; padding: 8px; background: #292929; border: 1px solid #4a4a4a; border-radius: 5px; color: #ddd; cursor: pointer; }
+
+.object-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 8px; border-radius: 6px;
+    background: #1f1f1f; border: 1px solid #2a2a2a;
+    cursor: pointer; transition: all .15s;
+}
+.object-item:hover { border-color: #4a9eff66; }
+.object-item.active { border-color: #4a9eff; background: #1a1a2e; }
+.object-item .thumb {
+    width: 48px; height: 48px;
+    object-fit: contain; background: #000;
+    border-radius: 4px; flex-shrink: 0;
+}
+.object-item .info { flex: 1; min-width: 0; }
+.object-item .info .label { font-size: 0.78em; color: #ccc; }
+.object-item .info .meta { font-size: 0.65em; color: #555; }
+.object-item .depth-badge {
+    font-size: 0.65em;
+    background: #2a2a3a;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #888;
+    flex-shrink: 0;
+}
+.object-item .z-control { width: 100%; accent-color: #4a9eff; }
+.ref-card { padding: 9px; background: #1f1f1f; border: 1px solid #333; border-radius: 6px; margin-bottom: 8px; }
+.ref-card-header { display: flex; justify-content: space-between; align-items: center; font-size: .78em; color: #ddd; margin-bottom: 7px; }
+.ref-card button { border: 0; background: transparent; color: #d66; cursor: pointer; font-size: 1.1em; }
+.ref-row { display: grid; grid-template-columns: 34px 1fr 38px; align-items: center; gap: 5px; font-size: .68em; color: #888; margin-top: 5px; }
+.ref-row input[type="range"] { width: 100%; accent-color: #4a9eff; }
+.ref-row select { grid-column: span 2; background: #292929; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 3px; font-size: 1em; }
+.ref-visible { display: flex; gap: 6px; align-items: center; color: #999; font-size: .72em; margin-bottom: 4px; }
+
+.object-item .vis-toggle {
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    border: 1px solid #444;
+    background: #2a2a2a;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #666;
+    flex-shrink: 0;
+}
+.object-item .vis-toggle.visible { background: #4a9eff22; border-color: #4a9eff66; color: #4a9eff; }
+
+/* Upload overlay */
+#uploadOverlay {
+    position: absolute; top: 0; right: 260px; bottom: 0; left: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: #0a0a0a;
+    z-index: 5;
+    cursor: pointer;
+}
+#uploadOverlay .icon { font-size: 3em; margin-bottom: 16px; opacity: 0.3; }
+#uploadOverlay p { color: #444; font-size: 1em; }
+#uploadOverlay .sub { color: #333; font-size: 0.8em; margin-top: 6px; }
+
+#uploadOverlay.dragover { background: #0d0d1a; }
+#uploadOverlay.dragover .icon { opacity: 0.6; }
+
+/* Loading spinner */
+#loader {
+    position: absolute; top: 0; right: 260px; bottom: 0; left: 0;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.6); z-index: 6;
+    flex-direction: column; gap: 12px;
+}
+#loader.active { display: flex; }
+.spinner {
+    width: 40px; height: 40px;
+    border: 3px solid #333;
+    border-top-color: #4a9eff;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loader .msg { font-size: 0.9em; color: #aaa; }
+
+#fileInput { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+    <div id="topbar">
+        <h1>SegmentAnything 3D <small>layered depth viewer</small></h1>
+        <select id="modeSelect" aria-label="Layer generation mode">
+            <option value="segmentation">SAM segmentation</option>
+            <option value="depth">ZipDepth</option>
+        </select>
+        <button id="uploadBtn">Upload Image</button>
+        <button id="addLayerBtn" disabled>+ Add Image Layer</button>
+        <span id="status">drop an image to start</span>
+        <span id="errorMsg"></span>
+    </div>
+    <div id="content">
+        <div id="uploadOverlay">
+            <div class="icon">⊞</div>
+            <p>Drop an image here</p>
+            <div class="sub">JPEG / PNG / WebP — objects will be arranged in Z-depth layers</div>
+        </div>
+        <div id="loader">
+            <div class="spinner"></div>
+            <div class="msg">Segmenting with SAM2...</div>
+        </div>
+        <div id="canvas-container"></div>
+        <aside id="objectPanel">
+            <div class="control-group" style="border-top:0; padding-top:0; margin-top:0;">
+                <label>Scene</label>
+                <button id="loadAnother">Another Image</button>
+            </div>
+            <div class="control-group ref-layers-section">
+                <label>Reference Layers</label>
+                <div id="refLayerContainer"></div>
+                <button id="addRefLayer" disabled>+ Add Layer</button>
+            </div>
+            <div class="control-group">
+                <label>Generated Layers</label>
+                <div id="generatedLayerList"><div class="meta">Upload image to generate scene layers.</div></div>
+            </div>
+        </aside>
+    </div>
+</div>
+<input type="file" id="fileInput" accept="image/*">
+<input type="file" id="refFileInput" accept="image/*">
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.172.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// --- state ---
+const STATE = { objects: [], references: [], sceneData: null, file: null };
+
+// --- DOM refs ---
+const $ = id => document.getElementById(id);
+const container = $('canvas-container');
+const uploadOverlay = $('uploadOverlay');
+const uploadBtn = $('uploadBtn');
+const fileInput = $('fileInput');
+const loader = $('loader');
+const status = $('status');
+const errorMsg = $('errorMsg');
+const objectPanel = $('objectPanel');
+const modeSelect = $('modeSelect');
+const addLayerBtn = $('addLayerBtn');
+const refFileInput = $('refFileInput');
+
+// --- Three.js scene ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const aspect = container.clientWidth / container.clientHeight;
+const viewSize = 2.8;
+const camera = new THREE.OrthographicCamera(
+    -viewSize * aspect, viewSize * aspect,
+    viewSize, -viewSize,
+    0.1, 100
+);
+camera.position.set(0, 0, 10);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 0);
+controls.update();
+
+// lights
+const ambient = new THREE.AmbientLight(0xffffff, 1.0);
+scene.add(ambient);
+const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+dir.position.set(1, 2, 3);
+scene.add(dir);
+const dir2 = new THREE.DirectionalLight(0xffffff, 0.3);
+dir2.position.set(-2, -1, -2);
+scene.add(dir2);
+
+
+
+// axes helper
+// scene.add(new THREE.AxesHelper(1));
+
+const group = new THREE.Group();
+scene.add(group);
+
+// --- resize ---
+function resize() {
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    const a = w / h;
+    camera.left = -viewSize * a;
+    camera.right = viewSize * a;
+    camera.top = viewSize;
+    camera.bottom = -viewSize;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+}
+window.addEventListener('resize', resize);
+
+// --- animation loop ---
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+animate();
+
+function clearScene() {
+    while (group.children.length > 0) {
+        const c = group.children[0];
+        c.geometry?.dispose();
+        if (c.material) { c.material.map?.dispose(); c.material.dispose(); }
+        group.remove(c);
+    }
+    STATE.objects = [];
+    STATE.references = [];
+    document.getElementById('refLayerContainer').innerHTML = '';
+    document.getElementById('generatedLayerList').innerHTML = '';
+}
+
+function loadImage(src) {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = src;
+    });
+}
+
+function setupSidebar() {
+    document.getElementById('addRefLayer').disabled = !STATE.sceneData;
+}
+
+async function buildDepthScene(data) {
+    clearScene();
+    STATE.sceneData = data;
+    addLayerBtn.disabled = false;
+    setupSidebar();
+    document.getElementById('generatedLayerList').innerHTML = '<div class="object-item"><div class="info"><div class="label">ZipDepth continuous mesh</div><div class="meta">Orbit view to see Z displacement. Added images can use a depth cutoff mask.</div></div></div>';
+
+    const [image, depthImage] = await Promise.all([loadImage(data.image), loadImage(data.depth)]);
+    const depthCanvas = document.createElement('canvas');
+    depthCanvas.width = depthImage.naturalWidth;
+    depthCanvas.height = depthImage.naturalHeight;
+    const depthCtx = depthCanvas.getContext('2d', { willReadFrequently: true });
+    depthCtx.drawImage(depthImage, 0, 0);
+    const pixels = depthCtx.getImageData(0, 0, depthCanvas.width, depthCanvas.height).data;
+
+    const aspect = data.shape[1] / data.shape[0];
+    const planeMax = 2.4;
+    const planeW = aspect >= 1 ? planeMax : planeMax * aspect;
+    const planeH = aspect >= 1 ? planeMax / aspect : planeMax;
+    const xSegments = 140;
+    const ySegments = Math.max(2, Math.round(xSegments / aspect));
+    const geometry = new THREE.PlaneGeometry(planeW, planeH, xSegments, ySegments);
+    const positions = geometry.attributes.position;
+    const uvs = geometry.attributes.uv;
+    for (let i = 0; i < positions.count; i++) {
+        const x = Math.min(depthCanvas.width - 1, Math.round(uvs.getX(i) * (depthCanvas.width - 1)));
+        const y = Math.min(depthCanvas.height - 1, Math.round((1 - uvs.getY(i)) * (depthCanvas.height - 1)));
+        const depth = pixels[(y * depthCanvas.width + x) * 4] / 255;
+        positions.setZ(i, (depth - 0.5) * 2.4);
+    }
+    positions.needsUpdate = true;
+    geometry.computeVertexNormals();
+    const texture = new THREE.Texture(image);
+    texture.needsUpdate = true;
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }));
+    group.add(mesh);
+    updateStatus('loaded ZipDepth mesh');
+}
+
+// --- build 3D scene from mask objects ---
+function build3DScene(data) {
+    if (data.mode === 'depth') { buildDepthScene(data); return; }
+    clearScene();
+    STATE.sceneData = data;
+    addLayerBtn.disabled = false;
+    setupSidebar();
+    const layerList = document.getElementById('generatedLayerList');
+    layerList.insertAdjacentHTML('beforebegin', `<div class="meta" style="margin-bottom:6px">SAM objects: ${data.masks.length}</div>`);
+    objectPanel.style.display = 'flex';
+
+    const masks = data.masks;
+    const n = masks.length;
+
+    const zMin = -1.2;
+    const zMax = 1.2;
+    const zStep = n > 1 ? (zMax - zMin) / (n - 1) : 0;
+
+    const origAspect = data.shape[1] / data.shape[0];
+    const planeMax = 2.4;
+    const planeW = origAspect >= 1 ? planeMax : planeMax * origAspect;
+    const planeH = origAspect >= 1 ? planeMax / origAspect : planeMax;
+    const planeGeo = new THREE.PlaneGeometry(planeW, planeH);
+
+    // Inpainted background at the back
+    const bgImg = new Image();
+    bgImg.crossOrigin = 'anonymous';
+    bgImg.src = data.background;
+    bgImg.onload = () => {
+        const tex = new THREE.Texture(bgImg);
+        tex.needsUpdate = true;
+        const mat = new THREE.MeshBasicMaterial({ map: tex });
+        const mesh = new THREE.Mesh(planeGeo, mat);
+        mesh.position.set(0, 0, -1.5);
+        group.add(mesh);
+    };
+
+    if (n === 0) { updateStatus('no objects found'); return; }
+
+    masks.forEach((m, i) => {
+        const z = n > 1 ? zMin + i * zStep : 0;
+
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = m.object;
+        img.onload = () => {
+            const tex = new THREE.Texture(img);
+            tex.needsUpdate = true;
+            tex.transparent = true;
+
+            const mat = new THREE.MeshBasicMaterial({
+                map: tex,
+                transparent: true,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            });
+            const mesh = new THREE.Mesh(planeGeo, mat);
+            mesh.position.set(0, 0, z);
+            group.add(mesh);
+
+            STATE.objects.push({ id: m.id, mesh, z, visible: true });
+
+            const el = document.createElement('div');
+            el.className = 'object-item active';
+            el.dataset.id = m.id;
+            el.innerHTML = `
+                <img class="thumb" src="${m.object}">
+                <div class="info">
+                    <div class="label">${data.mode === 'depth' ? 'Depth band' : 'Object'} #${m.id + 1}</div>
+                    <div class="meta">area: ${m.area}px &middot; score: ${m.score}</div>
+                    <input class="z-control" type="range" min="-3" max="3" step="0.01" value="${z}" aria-label="Z depth">
+                </div>
+                <div class="depth-badge">Z:${z.toFixed(2)}</div>
+                <div class="vis-toggle visible" data-visible="1">&#x1F441;</div>
+            `;
+            const toggle = el.querySelector('.vis-toggle');
+            const zControl = el.querySelector('.z-control');
+            const badge = el.querySelector('.depth-badge');
+            zControl.addEventListener('input', () => {
+                mesh.position.z = Number(zControl.value);
+                badge.textContent = `Z:${mesh.position.z.toFixed(2)}`;
+            });
+            toggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const vis = !mesh.visible;
+                mesh.visible = vis;
+                toggle.dataset.visible = vis ? '1' : '0';
+                toggle.classList.toggle('visible', vis);
+            });
+            layerList.appendChild(el);
+        };
+    });
+
+    updateStatus(`loaded ${n} objects`);
+}
+
+function updateStatus(msg) {
+    status.textContent = msg;
+}
+
+function showError(msg) {
+    errorMsg.textContent = msg;
+    setTimeout(() => errorMsg.textContent = '', 5000);
+}
+
+function scenePlaneSize() {
+    const aspect = STATE.sceneData.shape[1] / STATE.sceneData.shape[0];
+    const planeMax = 2.4;
+    return {
+        width: aspect >= 1 ? planeMax : planeMax * aspect,
+        height: aspect >= 1 ? planeMax / aspect : planeMax
+    };
+}
+
+async function refreshReferenceTexture(ref) {
+    const { width, height } = STATE.sceneData.shape ? { width: STATE.sceneData.shape[1], height: STATE.sceneData.shape[0] } : { width: 1, height: 1 };
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(ref.image, 0, 0, width, height);
+
+    if (ref.mask.value.startsWith('sam-')) {
+        const mask = STATE.sceneData.masks[Number(ref.mask.value.slice(4))];
+        if (mask) {
+            const maskImage = await loadImage(mask.object);
+            ctx.globalCompositeOperation = 'destination-in';
+            ctx.drawImage(maskImage, 0, 0, width, height);
+            ctx.globalCompositeOperation = 'source-over';
+        }
+    } else if (ref.mask.value === 'depth' && STATE.sceneData.depth) {
+        const depthImage = await loadImage(STATE.sceneData.depth);
+        const depthCanvas = document.createElement('canvas');
+        depthCanvas.width = width; depthCanvas.height = height;
+        const depthCtx = depthCanvas.getContext('2d', { willReadFrequently: true });
+        depthCtx.drawImage(depthImage, 0, 0, width, height);
+        const rgba = ctx.getImageData(0, 0, width, height);
+        const depthPixels = depthCtx.getImageData(0, 0, width, height).data;
+        const cutoff = Number(ref.cutoff.value) * 255;
+        for (let i = 0; i < rgba.data.length; i += 4) {
+            if (depthPixels[i] < cutoff) rgba.data[i + 3] = 0;
+        }
+        ctx.putImageData(rgba, 0, 0);
+    }
+    ref.texture.image = canvas;
+    ref.texture.needsUpdate = true;
+}
+
+function updateReference(ref) {
+    ref.mesh.position.set(Number(ref.x.value), Number(ref.y.value), Number(ref.z.value));
+    ref.mesh.scale.setScalar(Number(ref.scale.value));
+    ref.mesh.rotation.set(
+        THREE.MathUtils.degToRad(Number(ref.rx.value)),
+        THREE.MathUtils.degToRad(Number(ref.ry.value)),
+        THREE.MathUtils.degToRad(Number(ref.rz.value))
+    );
+    ref.mesh.visible = ref.visible.checked;
+    ref.values.x.textContent = Number(ref.x.value).toFixed(2);
+    ref.values.y.textContent = Number(ref.y.value).toFixed(2);
+    ref.values.z.textContent = Number(ref.z.value).toFixed(2);
+    ref.values.scale.textContent = Number(ref.scale.value).toFixed(2);
+    ref.values.rx.textContent = `${Number(ref.rx.value).toFixed(0)}°`;
+    ref.values.ry.textContent = `${Number(ref.ry.value).toFixed(0)}°`;
+    ref.values.rz.textContent = `${Number(ref.rz.value).toFixed(0)}°`;
+}
+
+function addReferenceLayer(file) {
+    if (!STATE.sceneData) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+        const image = await loadImage(reader.result);
+        const size = scenePlaneSize();
+        const texture = new THREE.CanvasTexture(document.createElement('canvas'));
+        const mesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(size.width, size.height),
+            new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+        );
+        group.add(mesh);
+        const ref = { image, texture, mesh };
+
+        const card = document.createElement('div');
+        card.className = 'ref-card';
+        const maskOptions = STATE.sceneData.mode === 'segmentation'
+            ? `<option value="none">No mask</option>${STATE.sceneData.masks.map((m, i) => `<option value="sam-${i}">SAM object #${i + 1}</option>`).join('')}`
+            : '<option value="none">No mask</option><option value="depth">ZipDepth cutoff</option>';
+        card.innerHTML = `
+            <div class="ref-card-header"><span>${file.name}</span><button title="Remove image">&times;</button></div>
+            <label class="ref-visible"><input class="visible" type="checkbox" checked> Show layer</label>
+            <div class="ref-row"><label>Mask</label><select>${maskOptions}</select></div>
+            <div class="ref-row"><label>X</label><input class="x" type="range" min="-3" max="3" step=".01" value="0"><span class="xv">0.00</span></div>
+            <div class="ref-row"><label>Y</label><input class="y" type="range" min="-3" max="3" step=".01" value="0"><span class="yv">0.00</span></div>
+            <div class="ref-row"><label>Z</label><input class="z" type="range" min="-3" max="3" step=".01" value="0"><span class="zv">0.00</span></div>
+            <div class="ref-row"><label>Scale</label><input class="scale" type="range" min=".1" max="3" step=".01" value="1"><span class="sv">1.00</span></div>
+            <div class="ref-row"><label>Rot X</label><input class="rx" type="range" min="-180" max="180" step="1" value="0"><span class="rxv">0°</span></div>
+            <div class="ref-row"><label>Rot Y</label><input class="ry" type="range" min="-180" max="180" step="1" value="0"><span class="ryv">0°</span></div>
+            <div class="ref-row"><label>Rot Z</label><input class="rz" type="range" min="-180" max="180" step="1" value="0"><span class="rzv">0°</span></div>
+            <div class="ref-row depth-cutoff" style="display:none"><label>Depth</label><input class="cutoff" type="range" min="0" max="1" step=".01" value=".5"><span>near</span></div>`;
+        const refContainer = document.getElementById('refLayerContainer');
+        if (!refContainer) { group.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); texture.dispose(); return; }
+        refContainer.appendChild(card);
+        ref.card = card;
+        ref.mask = card.querySelector('select');
+        ref.x = card.querySelector('.x'); ref.y = card.querySelector('.y'); ref.z = card.querySelector('.z'); ref.scale = card.querySelector('.scale');
+        ref.rx = card.querySelector('.rx'); ref.ry = card.querySelector('.ry'); ref.rz = card.querySelector('.rz');
+        ref.visible = card.querySelector('.visible');
+        ref.cutoff = card.querySelector('.cutoff');
+        ref.values = {
+            x: card.querySelector('.xv'), y: card.querySelector('.yv'), z: card.querySelector('.zv'), scale: card.querySelector('.sv'),
+            rx: card.querySelector('.rxv'), ry: card.querySelector('.ryv'), rz: card.querySelector('.rzv')
+        };
+        const update = () => updateReference(ref);
+        [ref.x, ref.y, ref.z, ref.scale, ref.rx, ref.ry, ref.rz, ref.visible].forEach(control => control.addEventListener('input', update));
+        ref.mask.addEventListener('change', async () => {
+            card.querySelector('.depth-cutoff').style.display = ref.mask.value === 'depth' ? 'grid' : 'none';
+            await refreshReferenceTexture(ref);
+        });
+        ref.cutoff.addEventListener('input', () => refreshReferenceTexture(ref));
+        card.querySelector('button').addEventListener('click', () => {
+            group.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); texture.dispose(); card.remove();
+            STATE.references = STATE.references.filter(item => item !== ref);
+        });
+        STATE.references.push(ref);
+        updateReference(ref);
+        await refreshReferenceTexture(ref);
+    };
+    reader.readAsDataURL(file);
+}
+
+// --- upload ---
+uploadOverlay.addEventListener('click', () => fileInput.click());
+uploadOverlay.addEventListener('dragover', (e) => { e.preventDefault(); uploadOverlay.classList.add('dragover'); });
+uploadOverlay.addEventListener('dragleave', () => uploadOverlay.classList.remove('dragover'));
+uploadOverlay.addEventListener('drop', (e) => { e.preventDefault(); uploadOverlay.classList.remove('dragover'); handleFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+uploadBtn.addEventListener('click', () => fileInput.click());
+document.getElementById('loadAnother').addEventListener('click', () => fileInput.click());
+addLayerBtn.addEventListener('click', () => refFileInput.click());
+document.getElementById('addRefLayer').addEventListener('click', () => refFileInput.click());
+refFileInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) addReferenceLayer(e.target.files[0]);
+    refFileInput.value = '';
+});
+modeSelect.addEventListener('change', () => {
+    if (!STATE.file) {
+        updateStatus('upload an image to apply this mode');
+        return;
+    }
+    handleFile(STATE.file);
+});
+
+async function handleFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    STATE.file = file;
+    const form = new FormData();
+    form.append('image', file);
+    form.append('mode', modeSelect.value);
+    loader.classList.add('active');
+    uploadOverlay.style.display = 'none';
+    loader.querySelector('.msg').textContent = modeSelect.value === 'depth'
+        ? 'Estimating depth with ZipDepth...'
+        : 'Segmenting with SAM2...';
+    updateStatus(modeSelect.value === 'depth' ? 'estimating depth...' : 'segmenting...');
+
+    try {
+        const res = await fetch('/upload', { method: 'POST', body: form });
+        if (!res.ok) { const t = await res.text(); throw new Error(res.status + ': ' + t.slice(0,200)); }
+        const data = await res.json();
+        if (!data.success) { throw new Error(data.error || 'upload failed'); }
+        build3DScene(data);
+    } catch (e) {
+        showError('Error: ' + e.message);
+        uploadOverlay.style.display = 'flex';
+        updateStatus('upload failed');
+    } finally {
+        loader.classList.remove('active');
+    }
+}
+
+// initial resize
+setupSidebar();
+resize();
+
+console.log('3D segment viewer ready');
+</script>
+</body>
+</html>

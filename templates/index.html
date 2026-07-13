@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SegmentAnything — SAM / ZipDepth Viewer</title>
+    <link rel="icon" href="data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000'%3e%3cpath d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/%3e%3c/svg%3e">
+    <link rel="stylesheet" href="/static/image2mesh.css">
+</head>
+<body>
+    <div id="container">
+        <canvas id="canvas"></canvas>
+        <button id="toggleUI" type="button" aria-pressed="false">UI OFF</button>
+        <div id="progressHud" class="hidden" aria-live="polite">
+            <div id="progressTitle">Processing...</div>
+            <div id="progressDetail"></div>
+        </div>
+        <span id="repoLink">SegmentAnything — SAM / ZipDepth</span>
+        <div id="captureFrame"></div>
+
+        <div id="dropZone">
+            <div id="dropText">Drop an Image</div>
+            <div id="dropSubtext">
+                Drop a JPG, PNG, WebP, AVIF, GIF, or BMP image.<br>
+                Choose SAM Segmentation or ZipDepth before upload.<br>
+                <span style="opacity:.8">Click here to select a file</span>
+            </div>
+        </div>
+
+        <!-- Upper-right: viewer controls -->
+        <div id="controls">
+            <div class="control-panel">
+                <div class="control-group">
+                    <button id="resetView">Reset View</button>
+                </div>
+                <div class="control-group">
+                    <label class="chk">
+                        <input type="checkbox" id="showSamLayers" checked>
+                        Show SAM Layers
+                    </label>
+                    <label class="chk">
+                        <input type="checkbox" id="showReferences" checked>
+                        Show Reference Layers
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Lower-right: inference settings and downloads -->
+        <div id="sidePanel">
+            <div class="control-panel">
+                <div class="control-group">
+                    <button id="loadAnother">Another Image</button>
+                </div>
+                <div class="control-group ref-layers-section">
+                    <label>Reference Layers</label>
+                    <div id="refLayerContainer"></div>
+                    <button id="addRefLayer">+ Add Layer</button>
+                    <input type="file" id="refFileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.avif,.gif,.bmp">
+                </div>
+                <div class="control-group">
+                    <label>Layer Model</label>
+                    <select id="modelSelect">
+                        <option value="segmentation" selected>SAM Segmentation</option>
+                        <option value="depth">ZipDepth</option>
+                    </select>
+                </div>
+                <div class="control-group" id="zipdepthControls">
+                    <label>ZipDepth Input Size</label>
+                    <select id="zipInputSize"><option value="384" selected>384</option><option value="512">512</option><option value="768">768</option></select>
+                </div>
+                <div class="control-group">
+                    <label>Quality (num_tokens): <span id="numTokensValue">1800</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Controls the model's internal inference resolution. More tokens produce a larger point/depth/normal map and can preserve finer detail, but increase processing time and memory use. Current range: 1200–2500." aria-label="Quality help">?</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="numTokens" min="1200" max="2500" step="100" value="1800">
+                    </div>
+                </div>
+                <div class="control-group">
+                    <button id="recompute" disabled>Recompute</button>
+                </div>
+                <div class="control-group">
+                    <div class="checkbox-with-help">
+                        <label class="chk">
+                            <input type="checkbox" id="depthUpsampleEnable" checked>
+                            High-Res Depth
+                        </label>
+                        <span class="help-tip" tabindex="0" role="note" data-tooltip="Upsamples metric depth to the input image aspect ratio, capped at 2048 px on the long edge. Advanced parameters use internal defaults." aria-label="High-Res Depth help">?</span>
+                    </div>
+                    <div id="depthUpsampleStatus" class="control-status">Depth upsampling: pending</div>
+                </div>
+                <div class="control-group hidden-control">
+                    <label>Initial Depth Resize</label>
+                    <select id="depthInitialMode">
+                        <option value="bilinear" selected>Bilinear</option>
+                        <option value="nearest">Nearest</option>
+                    </select>
+                </div>
+                <div class="control-group hidden-control">
+                    <label>JBU Radius (px): <span id="depthUpsampleRadiusValue">3</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="depthUpsampleRadius" min="1" max="8" step="1" value="3">
+                    </div>
+                </div>
+                <div class="control-group hidden-control">
+                    <label>Sigma Space: <span id="depthSigmaSpaceValue">2.0</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="depthSigmaSpace" min="0.5" max="8.0" step="0.5" value="2.0">
+                    </div>
+                </div>
+                <div class="control-group hidden-control">
+                    <label>Sigma Color: <span id="depthSigmaColorValue">0.080</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="depthSigmaColor" min="0.005" max="0.300" step="0.005" value="0.080">
+                    </div>
+                </div>
+                <div class="control-group hidden-control">
+                    <label>Sigma Depth (m): <span id="depthSigmaDepthValue">0.15</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="depthSigmaDepth" min="0.01" max="1.00" step="0.01" value="0.15">
+                    </div>
+                </div>
+                <div class="control-group hidden-control">
+                    <label class="chk">
+                        <input type="checkbox" id="depthTreatZeroInvalid" checked>
+                        Treat 0 depth as invalid
+                    </label>
+                    <label>Invalid Depth Value</label>
+                    <input type="number" id="depthInvalidValue" value="-1" step="0.1">
+                </div>
+                <div class="control-group">
+                    <label>Edge Threshold: <span id="edgeThresholdValue">0.050</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Relative depth jump threshold for EdgeSnap detection." aria-label="Edge Threshold help">?</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="edgeThreshold" min="0.0001" max="1.000" step="0.0001" value="0.050">
+                    </div>
+                    <div class="control-help">Compares horizontal/vertical neighbor pairs. If their relative depth jump is above this value, both pixels are marked for snapping. Smaller values mark more edges. Set 1.000 to disable EdgeSnap and mesh seam splitting.</div>
+                </div>
+                <div class="control-group">
+                    <label>Snap Width (px): <span id="snapWidthValue">8</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Maximum EdgeSnap propagation passes from stable depth areas." aria-label="Snap Width help">?</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="snapWidth" min="1" max="32" step="1" value="8">
+                    </div>
+                    <div class="control-help">Each pass lets a stable near/far depth area claim adjacent marked edge pixels. Higher values can clean thicker detected ramps; pixels not reached within this limit keep their original depth.</div>
+                </div>
+                <div class="control-group">
+                    <label>Sky / Masked Area <span class="help-tip" tabindex="0" role="note" data-tooltip="Unavailable for SAM and ZipDepth." aria-label="Sky / Masked Area help">?</span></label>
+                    <select id="maskMode">
+                        <option value="sky" selected>Sky Backdrop — keep sky as a far plane</option>
+                        <option value="off">Apply Mask OFF — keep model depth as-is</option>
+                        <option value="remove">Apply Mask ON — remove sky / masked area</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <div class="checkbox-with-help">
+                        <label class="chk">
+                            <input type="checkbox" id="fillOcclusion" checked>
+                            Fill Occlusion (Inpaint)
+                        </label>
+                        <span class="help-tip" tabindex="0" role="note" data-tooltip="Fills holes cut at depth edges with a second background layer extended from the far side. Allows slight look-around without seeing through the mesh." aria-label="Fill Occlusion help">?</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <div class="checkbox-with-help">
+                        <label class="chk">
+                            <input type="checkbox" id="fillBackdropLayer" checked>
+                            Fill B (Far Backdrop)
+                        </label>
+                        <span class="help-tip" tabindex="0" role="note" data-tooltip="Adds a smooth far-envelope layer behind everything, textured with heavily blurred far-side colors. Remaining holes show this blurred backdrop instead of black." aria-label="Fill B help">?</span>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Fill Margin (% long edge): <span id="fillMarginValue">25.0%</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="How far the background layer extends behind foreground silhouettes, measured as a percentage of the original image long edge. Larger values tolerate more camera movement but extrapolate more." aria-label="Fill Margin help">?</span></label>
+                    <div class="slider-container">
+                        <input type="range" id="fillMargin" min="0.5" max="50" step="0.5" value="25">
+                    </div>
+                </div>
+                <details class="control-details other-controls">
+                    <summary>Other</summary>
+                    <div class="control-group">
+                        <label>Small Component Faces <span class="help-tip" tabindex="0" role="note" data-tooltip="Removes isolated mesh or backfill face islands smaller than this face count after depth-edge cutting. Set 0 to keep all islands." aria-label="Small Component Faces help">?</span></label>
+                        <input type="number" id="smallComponentFaces" min="0" step="1" value="64">
+                        <div class="control-help">Applies to both the main mesh and backfill mesh. Higher values remove larger isolated fragments.</div>
+                    </div>
+                    <div class="control-group">
+                        <label>Backfill Parallax Cut: <span id="backfillParallaxCutValue">0.50x</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Backfill mesh face cut threshold as a multiplier of the scene median disparity. Higher values keep more backfill faces connected; lower values cut foreground-facing smears more aggressively." aria-label="Backfill Parallax Cut help">?</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="backfillParallaxCut" min="0.05" max="2.00" step="0.05" value="0.50">
+                        </div>
+                        <div class="control-help">Cuts a backfill face when its disparity gap is larger than this value times the median scene disparity.</div>
+                    </div>
+                    <div class="control-group">
+                        <label>Backfill Front Clamp: <span id="backfillFrontClampValue">1.00x</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Maximum generated disparity relative to the assigned background edge. 1.00 prevents generated fill from moving closer than its edge; lower pushes it farther back; higher allows protrusion." aria-label="Backfill Front Clamp help">?</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="backfillFrontClamp" min="0.50" max="1.50" step="0.05" value="1.00">
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label>Backfill Far Clamp: <span id="backfillFarClampValue">4.0x</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Maximum generated depth relative to the assigned background edge. Larger values allow deeper extrapolation; smaller values keep fill closer to the edge depth." aria-label="Backfill Far Clamp help">?</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="backfillFarClamp" min="1.00" max="16.00" step="0.25" value="4.00">
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label>Backfill Hole Preclaim (px): <span id="backfillHolePreclaimValue">3</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Before normal fill BFS, all backfill edge seeds claim only black hole pixels by this many pixels. When claims collide, the deeper label wins. Set 0 to disable." aria-label="Backfill Hole Preclaim help">?</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="backfillHolePreclaim" min="0" max="16" step="1" value="3">
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label>Backfill Far Priority (px): <span id="backfillFarPriorityValue">12</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="How far a deeper backfill label can locally override a nearer label after nearest-edge BFS. Higher values suppress foreground-depth streaks more, but can pull wider regions toward farther surfaces. Set 0 to disable." aria-label="Backfill Far Priority help">?</span></label>
+                        <div class="slider-container">
+                            <input type="range" id="backfillFarPriority" min="0" max="48" step="1" value="12">
+                        </div>
+                    </div>
+                </details>
+                <div class="control-group dl-group">
+                    <div class="dl-title">Downloads</div>
+                    <button id="dlImage" disabled>Original</button>
+                    <button id="dlDepth" disabled>Depth (EXR)</button>
+                    <button id="dlDepthInitial" disabled>Initial Depth (EXR)</button>
+                    <button id="dlNormal" disabled>Normal Map (PNG)</button>
+                    <button id="dlWorldPos" disabled>Aligned WorldPos (EXR)</button>
+                    <button id="dlBackfillWP" disabled>Backfill WorldPos (EXR)</button>
+                    <button id="dlBackfillTex" disabled>Backfill Texture (PNG)</button>
+                    <button id="exportOBJ" disabled>OBJ + Textures (ZIP)</button>
+                    <button id="exportGLB" disabled>Scene GLB</button>
+                    <button id="exportPNG" disabled>PNG (2048)</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="loadingOverlay">
+            <div class="loader">
+                <div class="spinner"></div>
+                <div id="loadingText">Loading...</div>
+                <div id="loadingProgress" class="progress" style="display:none;">
+                    <div id="loadingBar" class="progress-bar"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="info">
+            <div>Left drag: Rotate</div>
+            <div>Wheel: Zoom</div>
+            <div>Right drag: Pan</div>
+        </div>
+
+        <div id="meshInfo">
+            <div class="info-panel">
+                <div><span class="info-label">Model:</span> <span id="executionProvider">--</span></div>
+                <div><span class="info-label">Image:</span> <span id="meshResolution">--</span></div>
+                <div><span class="info-label">X Range:</span> <span id="rangeX">--</span></div>
+                <div><span class="info-label">Y Range:</span> <span id="rangeY">--</span></div>
+                <div><span class="info-label">Z Range:</span> <span id="rangeZ">--</span></div>
+            </div>
+        </div>
+
+        <input type="file" id="fileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.avif,.gif,.bmp" />
+    </div>
+
+    <!-- Three.js and dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+
+    <!-- onnxruntime-web -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
+
+    <!-- App modules -->
+    <div id="orbit-cursor-tooltip">Click to set orbit center</div>
+    <script src="/static/segment-ui.js"></script>
+</body>
+</html>

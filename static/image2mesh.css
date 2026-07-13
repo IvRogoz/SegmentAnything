@@ -1,0 +1,730 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    color-scheme: dark;
+    --page-bg: #000000;
+    --surface: rgba(0, 0, 0, 0.42);
+    --surface-strong: rgba(0, 0, 0, 0.72);
+    --surface-hover: rgba(255, 255, 255, 0.14);
+    --border: rgba(255, 255, 255, 0.22);
+    --border-hover: rgba(255, 255, 255, 0.5);
+    --text: #ffffff;
+    --accent: #667eea;
+    --success: #4caf50;
+}
+
+html,
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--page-bg);
+    color: var(--text);
+}
+
+#container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+#toggleUI {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    z-index: 1500;
+    min-width: 76px;
+    margin: 0;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.62);
+}
+
+#repoLink {
+    position: absolute;
+    left: 50%;
+    bottom: 10px;
+    z-index: 1500;
+    transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 12px;
+    text-decoration: none;
+    text-shadow: 0 1px 3px #000;
+}
+
+#repoLink:hover {
+    color: var(--text);
+    text-decoration: underline;
+}
+
+body.ui-hidden #dropZone,
+body.ui-hidden #controls,
+body.ui-hidden #sidePanel,
+body.ui-hidden #info,
+body.ui-hidden #meshInfo,
+body.ui-hidden #captureFrame,
+body.ui-hidden #progressHud,
+body.ui-hidden #repoLink {
+    display: none !important;
+}
+
+body.ui-hidden #toggleUI {
+    opacity: 0.62;
+}
+
+body.ui-hidden #toggleUI:hover {
+    opacity: 1;
+}
+
+#dropZone {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 480px;
+    height: 240px;
+    border: 2px dashed rgba(255, 255, 255, 0.72);
+    border-radius: 15px;
+    background: var(--surface);
+    backdrop-filter: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    z-index: 1000;
+}
+
+#dropZone:hover,
+#dropZone.dragover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--success);
+    transform: translate(-50%, -50%) scale(1.05);
+}
+
+#dropZone.hidden {
+    display: none;
+}
+
+#progressHud {
+    position: absolute;
+    top: 64px;
+    left: 50%;
+    z-index: 1490;
+    min-width: 260px;
+    max-width: min(520px, calc(100vw - 32px));
+    transform: translateX(-50%);
+    padding: 7px 12px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.68);
+    color: rgba(255, 255, 255, 0.9);
+    pointer-events: none;
+    text-align: center;
+    text-shadow: 0 1px 3px #000;
+}
+
+#progressHud.hidden {
+    display: none;
+}
+
+#progressTitle {
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+#progressDetail {
+    min-height: 13px;
+    margin-top: 2px;
+    color: rgba(205, 214, 255, 0.88);
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+#dropText {
+    color: var(--text);
+    font-size: 22px;
+    margin-bottom: 12px;
+    text-align: center;
+    font-weight: bold;
+    text-shadow: 0 1px 4px #000, 0 0 10px rgba(0, 0, 0, 0.95);
+}
+
+#dropSubtext {
+    color: var(--text);
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.7;
+    text-shadow: 0 1px 4px #000, 0 0 10px rgba(0, 0, 0, 0.95);
+}
+
+#controls {
+    /* 表示系の小パネルは左側（meshInfo の下、重ならない位置） */
+    position: absolute;
+    top: 210px;
+    left: 20px;
+    z-index: 1000;
+    display: block;
+}
+
+#sidePanel {
+    /* 設定/DLの大パネルは右上。縦に長くなって下端が画面外に出ても
+       触れるように、収まらない分はパネル内スクロール。 */
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+    display: block;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+}
+
+#sidePanel .control-panel {
+    width: min(380px, calc(100vw - 40px));
+    min-width: 0;
+}
+
+.control-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 15px;
+    border-radius: 10px;
+    color: var(--text);
+    box-shadow: none;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+    min-width: 230px;
+}
+
+.control-group {
+    margin-bottom: 15px;
+}
+
+.control-group:last-child {
+    margin-bottom: 0;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+
+label.chk {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    cursor: pointer;
+}
+
+label.chk input {
+    margin-right: 8px;
+    cursor: pointer;
+}
+
+.slider-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+input[type="range"] {
+    flex: 1;
+    min-width: 150px;
+    accent-color: var(--accent);
+}
+
+.slider-value {
+    min-width: 45px;
+    text-align: right;
+    font-size: 13px;
+}
+
+button,
+select,
+input[type="number"] {
+    background: rgba(0, 0, 0, 0.56);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+select,
+input[type="number"] {
+    width: 100%;
+    padding: 7px 9px;
+}
+
+button {
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-right: 5px;
+    margin-bottom: 5px;
+}
+
+button:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-hover);
+}
+
+button:disabled {
+    background: rgba(0, 0, 0, 0.24);
+    border-color: rgba(255, 255, 255, 0.2);
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.control-help {
+    max-width: 260px;
+    margin-top: 3px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.control-status {
+    max-width: 260px;
+    min-height: 0;
+    margin-top: 5px;
+    color: #b9c4ff;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.control-status.warning {
+    color: #ffd08a;
+    font-weight: 700;
+}
+
+.control-details {
+    margin-top: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.28);
+}
+
+.control-details summary {
+    padding: 7px 9px;
+    cursor: pointer;
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.control-details dl {
+    padding: 0 9px 9px;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.control-details dt {
+    margin-top: 8px;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+.control-details dd {
+    margin: 2px 0 0;
+    color: rgba(255, 255, 255, 0.76);
+}
+
+.control-details .control-group {
+    padding: 0 9px;
+    margin-bottom: 12px;
+}
+
+.control-details .control-group:first-of-type {
+    padding-top: 2px;
+}
+
+.control-details .control-group:last-child {
+    margin-bottom: 9px;
+}
+
+.other-controls {
+    margin-bottom: 15px;
+}
+
+#adjustHorizontalGrid.active,
+#setOrbitCenter.active {
+    border-color: var(--accent);
+    background: rgba(102, 126, 234, 0.35);
+}
+
+@keyframes orbit-center-blink {
+    0%, 100% { background: rgba(255, 110, 10, 0.85); border-color: #ff8c00; color: #fff; }
+    50%       { background: rgba(255, 110, 10, 0.2);  border-color: #ff8c00; color: #fff; }
+}
+
+#setOrbitCenter.hint {
+    animation: orbit-center-blink 1s ease-in-out infinite;
+    border-color: #ff8c00;
+    color: #fff;
+}
+
+#orbit-cursor-tooltip {
+    position: fixed;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.78);
+    color: #fff;
+    font-size: 13px;
+    padding: 5px 11px;
+    border-radius: 6px;
+    white-space: nowrap;
+    z-index: 9999;
+    display: none;
+}
+
+#useHorizontalGrid {
+    border-color: #ffad42;
+    background: rgba(230, 118, 18, 0.9);
+    color: #ffffff;
+    font-weight: 700;
+}
+
+#useHorizontalGrid:hover {
+    border-color: #ffd08a;
+    background: rgba(255, 139, 31, 1);
+}
+
+.hidden-control {
+    display: none;
+}
+
+#canvas.selecting-orbit-plane,
+#canvas.selecting-orbit-center {
+    cursor: crosshair;
+}
+
+input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.checkbox-with-help {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.checkbox-with-help label.chk {
+    margin-bottom: 0;
+}
+
+.help-tip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-left: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 50%;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help;
+    vertical-align: middle;
+}
+
+.help-tip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    z-index: 3000;
+    right: -8px;
+    bottom: calc(100% + 9px);
+    width: min(300px, 70vw);
+    padding: 9px 11px;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    border-radius: 7px;
+    background: rgba(18, 22, 34, 0.97);
+    box-shadow: 0 5px 18px rgba(0, 0, 0, 0.38);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.45;
+    text-align: left;
+    white-space: normal;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(3px);
+    transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+}
+
+.help-tip:hover::after,
+.help-tip:focus-visible::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.dl-group {
+    border-top: 1px solid rgba(255, 255, 255, 0.25);
+    padding-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.dl-title {
+    grid-column: 1 / -1;
+    font-size: 13px;
+    font-weight: bold;
+    opacity: 0.9;
+    margin-bottom: 2px;
+}
+
+.dl-group button {
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+    margin: 0;
+    padding: 7px 5px;
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: normal;
+}
+
+#loadingOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.34);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+}
+
+.loader {
+    color: var(--text);
+    text-align: center;
+    background: var(--surface-strong);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 32px;
+    text-shadow: 0 1px 4px #000;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.28);
+}
+
+.spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid var(--accent);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 20px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.progress {
+    width: 260px;
+    height: 10px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+    overflow: hidden;
+    margin: 15px auto 0;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.2s ease;
+}
+
+#canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+}
+
+#captureFrame {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 100%;
+    aspect-ratio: 1 / 1;
+    border: 2px dashed rgba(102, 126, 234, 0.5);
+    pointer-events: none;
+    z-index: 500;
+    display: none;
+}
+
+#captureFrame.visible {
+    display: block;
+}
+
+#fileInput,
+#refFileInput {
+    display: none;
+}
+
+#info {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    box-shadow: none;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+    display: block;
+    line-height: 1.8;
+}
+
+#meshInfo {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    z-index: 1000;
+    display: block;
+}
+
+.info-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 15px;
+    border-radius: 10px;
+    color: var(--text);
+    box-shadow: none;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+    font-size: 14px;
+    min-width: 220px;
+}
+
+.info-panel div {
+    margin-bottom: 8px;
+}
+
+.info-panel div:last-child {
+    margin-bottom: 0;
+}
+
+.info-label {
+    color: #ffffff;
+    font-weight: bold;
+    opacity: 0.9;
+}
+
+/* ---- Reference Layers ---- */
+.ref-layer-card {
+    background: rgba(0, 0, 0, 0.32);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+}
+.ref-layer-card:last-child {
+    margin-bottom: 0;
+}
+.ref-layer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 13px;
+    font-weight: 600;
+}
+.ref-layer-header .remove-layer-btn {
+    background: none;
+    border: none;
+    color: rgba(255, 100, 100, 0.8);
+    cursor: pointer;
+    font-size: 15px;
+    padding: 0 4px;
+    margin: 0;
+    line-height: 1;
+}
+.ref-layer-header .remove-layer-btn:hover {
+    color: #ff4444;
+}
+.ref-layer-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    font-size: 12px;
+}
+.ref-layer-row .chk {
+    margin-bottom: 0;
+    font-size: 12px;
+}
+.ref-layer-row label {
+    margin-bottom: 0;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.ref-layer-row .slider-container {
+    flex: 1;
+    gap: 4px;
+}
+.ref-layer-row input[type="range"] {
+    min-width: 60px;
+    height: 4px;
+}
+.ref-layer-row .slider-value {
+    min-width: 32px;
+    font-size: 11px;
+}
+.ref-layer-rot-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    margin-top: 2px;
+}
+.ref-layer-rot-row label {
+    margin-bottom: 0;
+    font-size: 11px;
+    white-space: nowrap;
+}
+.ref-layer-rot-row input[type="range"] {
+    min-width: 40px;
+    height: 4px;
+}
+.ref-layer-rot-row .slider-value {
+    min-width: 28px;
+    font-size: 10px;
+}
+#refLayerContainer {
+    margin-bottom: 6px;
+}
+
+/* Removed MoGe-only controls: SegmentAnything uses SAM and ZipDepth. */
+#sidePanel .control-group:has(#numTokens), #sidePanel .control-group:has(#recompute),
+#sidePanel .control-group:has(#depthUpsampleEnable), #sidePanel .control-group:has(#edgeThreshold),
+#sidePanel .control-group:has(#snapWidth), #sidePanel .control-group:has(#maskMode),
+#sidePanel .control-group:has(#fillOcclusion), #sidePanel .control-group:has(#fillBackdropLayer),
+#sidePanel .control-group:has(#fillMargin), #sidePanel .other-controls, #sidePanel .dl-group { display: none; }
+
+/* SegmentAnything reference-layer controls: compact, one control per row. */
+.ref-layer-card { padding: 10px; min-width: 0; }
+.ref-layer-header small { display: block; color: rgba(255,255,255,.55); font-weight: 400; max-width: 205px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-toggle { display: block; margin: 0 0 8px; }
+.layer-control { display: grid; grid-template-columns: 72px minmax(0,1fr) 42px; align-items: center; column-gap: 7px; margin: 6px 0; }
+.layer-control label { margin: 0; font-size: 11px; white-space: nowrap; }
+.layer-control input[type="range"] { min-width: 0; width: 100%; height: 4px; }
+.layer-control output { color: rgba(255,255,255,.72); font: 11px monospace; text-align: right; }
+.layer-separator { border-top: 1px solid rgba(255,255,255,.12); color: rgba(255,255,255,.58); font-size: 10px; letter-spacing: .08em; margin: 9px 0 3px; padding-top: 7px; text-transform: uppercase; }
