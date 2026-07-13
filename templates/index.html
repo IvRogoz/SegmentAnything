@@ -10,7 +10,7 @@
 <body>
     <div id="container">
         <canvas id="canvas"></canvas>
-        <button id="toggleUI" type="button" aria-pressed="false">UI OFF</button>
+        <div id="brushOutline" aria-hidden="true"></div>
         <div id="progressHud" class="hidden" aria-live="polite">
             <div id="progressTitle">Processing...</div>
             <div id="progressDetail"></div>
@@ -40,7 +40,7 @@
                     </label>
                     <label class="chk">
                         <input type="checkbox" id="showReferences" checked>
-                        Show Reference Layers
+                        Show Layers
                     </label>
                 </div>
             </div>
@@ -53,7 +53,7 @@
                     <button id="loadAnother">Another Image</button>
                 </div>
                 <div class="control-group ref-layers-section">
-                    <label>Reference Layers</label>
+                    <label>Layers</label>
                     <div id="refLayerContainer"></div>
                     <button id="addRefLayer">+ Add Layer</button>
                     <input type="file" id="refFileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.avif,.gif,.bmp">
