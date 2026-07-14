@@ -68,11 +68,17 @@
                     <select id="modelSelect">
                         <option value="segmentation" selected>SAM Segmentation</option>
                         <option value="depth">ZipDepth</option>
+                        <option value="depth-anything-v2-small-webgpu">Depth Anything V2 Small — WebGPU</option>
+                        <option value="midas-v21-small-webgpu">MiDaS v2.1 Small 256 — WebGPU</option>
                     </select>
                 </div>
                 <div class="control-group" id="zipdepthControls">
                     <label>ZipDepth Input Size</label>
                     <select id="zipInputSize"><option value="384" selected>384</option><option value="512">512</option><option value="768">768</option></select>
+                </div>
+                <div class="control-group" id="midasTemporalControls" style="display:none">
+                    <label>MiDaS Temporal Smoothing: <span id="midasTemporalValue">90%</span></label>
+                    <input id="midasTemporalSmoothing" type="range" min="0" max="0.98" step="0.01" value="0.90">
                 </div>
                 <div class="control-group">
                     <label>Quality (num_tokens): <span id="numTokensValue">1800</span> <span class="help-tip" tabindex="0" role="note" data-tooltip="Controls the model's internal inference resolution. More tokens produce a larger point/depth/normal map and can preserve finer detail, but increase processing time and memory use. Current range: 1200–2500." aria-label="Quality help">?</span></label>

@@ -2,6 +2,11 @@
   const $ = id => document.getElementById(id);
   const file = $('fileInput'), drop = $('dropZone'), refs = new Map();
   let source = null, activeFile = null, imageAspect = 1, referenceNumber = 0, mainVideo = null;
+  const browserDepthModels = {
+    'depth-anything-v2-small-webgpu': { label: 'Depth Anything V2 Small', url: '/static/models/depth_anything_v2_vits.onnx', size: 518, order: 'rgb', mean: [123.675, 116.28, 103.53], std: [58.395, 57.12, 57.375], byteScale: true },
+    'midas-v21-small-webgpu': { label: 'MiDaS v2.1 Small 256', url: '/static/models/midas_v21_small_256.onnx', size: 256, order: 'bgr', mean: [.485, .456, .406], std: [.229, .224, .225], byteScale: false }
+  };
+  const browserDepthSessions = new Map();
   const scene = new THREE.Scene();
   const viewHeight = 3.2;
   const camera = new THREE.OrthographicCamera(-viewHeight * innerWidth / innerHeight / 2, viewHeight * innerWidth / innerHeight / 2, viewHeight / 2, -viewHeight / 2, .1, 100);
@@ -18,6 +23,49 @@
   const img = src => new Promise((resolve, reject) => {
     const image = new Image(); image.onload = () => resolve(image); image.onerror = reject; image.src = src;
   });
+  const isBrowserDepthModel = () => Boolean(browserDepthModels[$('modelSelect').value]);
+  const waitFor = (element, event) => new Promise((resolve, reject) => { const done = () => { element.removeEventListener(event, done); element.removeEventListener('error', fail); resolve(); }; const fail = () => { element.removeEventListener(event, done); reject(new Error('Cannot decode video')); }; element.addEventListener(event, done, { once: true }); element.addEventListener('error', fail, { once: true }); });
+  async function browserDepthSession(modelId) {
+    if (!navigator.gpu) throw Error('WebGPU is unavailable. This model has no fallback.');
+    if (browserDepthSessions.has(modelId)) return browserDepthSessions.get(modelId);
+    const config = browserDepthModels[modelId];
+    let session;
+    try { session = await ort.InferenceSession.create(config.url, { executionProviders: ['webgpu'] }); }
+    catch (error) { throw Error(`${config.label} failed to load with WebGPU: ${error.message}`); }
+    browserDepthSessions.set(modelId, session); return session;
+  }
+  async function inferBrowserDepth(imageSource, modelId, videoState = null, frameIndex = null) {
+    const config = browserDepthModels[modelId], width = imageSource.videoWidth || imageSource.naturalWidth || imageSource.width, height = imageSource.videoHeight || imageSource.naturalHeight || imageSource.height;
+    if (!width || !height) throw Error('No decoded image frame for browser depth inference.');
+    const original = document.createElement('canvas'); original.width = width; original.height = height; original.getContext('2d').drawImage(imageSource, 0, 0, width, height);
+    const input = document.createElement('canvas'); input.width = input.height = config.size; const inputContext = input.getContext('2d', { willReadFrequently: true }); inputContext.drawImage(original, 0, 0, config.size, config.size);
+    const pixels = inputContext.getImageData(0, 0, config.size, config.size).data, tensorData = new Float32Array(3 * config.size * config.size), plane = config.size * config.size;
+    for (let i = 0; i < plane; i++) {
+      const pixel = i * 4, channels = config.order === 'bgr' ? [pixels[pixel + 2], pixels[pixel + 1], pixels[pixel]] : [pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]];
+      for (let channel = 0; channel < 3; channel++) { const value = config.byteScale ? channels[channel] : channels[channel] / 255; tensorData[channel * plane + i] = (value - config.mean[channel]) / config.std[channel]; }
+    }
+    const session = await browserDepthSession(modelId), inputName = session.inputNames[0], result = await session.run({ [inputName]: new ort.Tensor('float32', tensorData, [1, 3, config.size, config.size]) }), output = result[session.outputNames[0]], values = output.data;
+    let minimum = Infinity, maximum = -Infinity;
+    for (const value of values) { if (Number.isFinite(value)) { minimum = Math.min(minimum, value); maximum = Math.max(maximum, value); } }
+    if (!Number.isFinite(minimum) || maximum <= minimum) throw Error(`${config.label} returned invalid depth.`);
+    const depthSmall = document.createElement('canvas'); depthSmall.width = depthSmall.height = config.size; const depthPixels = depthSmall.getContext('2d').createImageData(config.size, config.size);
+    const useTemporalSmoothing = modelId === 'midas-v21-small-webgpu' && videoState && frameIndex !== null;
+    const smoothing = Number($('midasTemporalSmoothing').value);
+    const canBlend = useTemporalSmoothing && videoState.previousDepth && videoState.previousDepthFrame === frameIndex - 1;
+    const smoothed = useTemporalSmoothing ? new Uint8ClampedArray(plane) : null;
+    for (let i = 0; i < plane; i++) {
+      const rawNormalized = Math.max(0, Math.min(255, Math.round((values[i] - minimum) / (maximum - minimum) * 255)));
+      const normalized = modelId === 'midas-v21-small-webgpu' ? 255 - rawNormalized : rawNormalized;
+      const value = canBlend ? Math.round(videoState.previousDepth[i] * smoothing + normalized * (1 - smoothing)) : normalized;
+      if (smoothed) smoothed[i] = value;
+      const pixel = i * 4; depthPixels.data[pixel] = depthPixels.data[pixel + 1] = depthPixels.data[pixel + 2] = value; depthPixels.data[pixel + 3] = 255;
+    }
+    if (smoothed) { videoState.previousDepth = smoothed; videoState.previousDepthFrame = frameIndex; }
+    depthSmall.getContext('2d').putImageData(depthPixels, 0, 0);
+    const depth = document.createElement('canvas'); depth.width = width; depth.height = height; depth.getContext('2d').drawImage(depthSmall, 0, 0, width, height);
+    const imageDataUrl = original.toDataURL('image/png');
+    return { success: true, mode: 'depth', image_id: `webgpu:${modelId}`, image: imageDataUrl, background: imageDataUrl, masks: [], depth: depth.toDataURL('image/png'), shape: [height, width] };
+  }
   function render() { requestAnimationFrame(render); orbit.update(); renderer.render(scene, camera); }
   render();
   function clearBaseWorld() { while (world.children.length) world.remove(world.children[0]); }
@@ -52,7 +100,7 @@
     return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: color, side: THREE.DoubleSide }));
   }
   async function draw(data, preserveLayers = false) {
-    if (preserveLayers) clearBaseWorld(); else clearWorld(); source = data; imageAspect = data.shape[1] / data.shape[0];
+    if (!preserveLayers) clearWorld(); source = data; imageAspect = data.shape[1] / data.shape[0];
     $('executionProvider').textContent = data.mode === 'depth' ? 'ZipDepth' : 'SAM Segmentation';
     $('meshResolution').textContent = `${data.shape[1]} × ${data.shape[0]}`;
     $('rangeX').textContent = `-${(imageAspect * 1.35).toFixed(2)} … ${(imageAspect * 1.35).toFixed(2)}`;
@@ -61,11 +109,15 @@
     $('showSamLayers').closest('label').style.display = data.mode === 'depth' ? 'none' : '';
     const width = 2.7, height = width / imageAspect;
     if (data.mode === 'depth') {
-      world.add(await depthMesh(data.image, data.depth, width, height));
+      const nextMesh = await depthMesh(data.image, data.depth, width, height);
+      if (preserveLayers) clearBaseWorld();
+      world.add(nextMesh);
       return;
     }
-    const background = plane(width, height, await texture(data.background), -1); background.userData.kind = 'background'; world.add(background);
-    for (let i = 0; i < data.masks.length; i++) { const layer = plane(width, height, await texture(data.masks[i].object), i * .08); layer.userData.kind = 'sam'; world.add(layer); }
+    const [backgroundTexture, ...layerTextures] = await Promise.all([texture(data.background), ...data.masks.map(mask => texture(mask.object))]);
+    if (preserveLayers) clearBaseWorld();
+    const background = plane(width, height, backgroundTexture, -1); background.userData.kind = 'background'; world.add(background);
+    layerTextures.forEach((layerTexture, index) => { const layer = plane(width, height, layerTexture, index * .08); layer.userData.kind = 'sam'; world.add(layer); });
   }
   async function addReference(fileToAdd) {
     if (!fileToAdd || !source) return;
@@ -182,9 +234,18 @@
     if (!mainVideo || mainVideo.processing || frame < 0 || frame >= mainVideo.frameCount) return;
     mainVideo.processing = true; mainVideo.frame = frame; updateVideoControls();
     try {
-      const form = new FormData(); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value);
-      const response = await fetch(`/video/${mainVideo.id}/infer/${frame}`, { method: 'POST', body: form }); const data = await response.json();
-      if (!response.ok) throw Error(data.error || 'Frame processing failed');
+      let data;
+      if (isBrowserDepthModel()) {
+        const frameResponse = await fetch(`/video/${mainVideo.id}/frame/${frame}`);
+        if (!frameResponse.ok) { const error = await frameResponse.json(); throw Error(error.error || 'Cannot decode video frame'); }
+        const frameUrl = URL.createObjectURL(await frameResponse.blob());
+        try { data = await inferBrowserDepth(await img(frameUrl), $('modelSelect').value, mainVideo, frame); }
+        finally { URL.revokeObjectURL(frameUrl); }
+      } else {
+        const form = new FormData(); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value);
+        const response = await fetch(`/video/${mainVideo.id}/infer/${frame}`, { method: 'POST', body: form }); data = await response.json();
+        if (!response.ok) throw Error(data.error || 'Frame processing failed');
+      }
       await draw(data, true); syncLayerVideos(frame);
     } catch (error) { mainVideo.playing = false; alert(error.message); }
     finally {
@@ -195,12 +256,12 @@
     }
   }
   async function loadMainVideo(selected) {
-    activeFile = selected; mainVideo = null; clearWorld(); $('loadingOverlay').style.display = 'flex';
+    activeFile = selected; if (mainVideo?.browserVideoUrl) URL.revokeObjectURL(mainVideo.browserVideoUrl); mainVideo = null; clearWorld(); $('loadingOverlay').style.display = 'flex';
     try {
       const form = new FormData(); form.append('video', selected);
       const response = await fetch('/video', { method: 'POST', body: form }); const data = await response.json();
       if (!response.ok) throw Error(data.error || 'Video upload failed');
-      mainVideo = { id: data.video_id, frameCount: data.frame_count, fps: data.fps, frame: 0, playing: false, processing: false, name: selected.name };
+      mainVideo = { id: data.video_id, frameCount: data.frame_count, fps: data.fps, frame: 0, playing: false, processing: false, name: selected.name, browserVideo: null, browserVideoUrl: null };
       $('executionProvider').textContent = 'Video pending'; $('meshResolution').textContent = `${data.width} Ã— ${data.height}`; updateVideoControls(); drop.classList.add('hidden'); $('sidePanel').style.display = 'block';
       await processMainVideoFrame(0);
     } catch (error) { alert(error.message); mainVideo = null; updateVideoControls(); }
@@ -214,12 +275,13 @@
     $('loadingOverlay').style.display = 'flex';
     const form = new FormData(); form.append('image', selected); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value);
     try {
-      const response = await fetch('/upload', { method: 'POST', body: form }); const data = await response.json();
-      if (!response.ok) throw Error(data.error || 'Upload failed');
+      let data;
+      if (isBrowserDepthModel()) { const fileUrl = URL.createObjectURL(selected); try { data = await inferBrowserDepth(await img(fileUrl), $('modelSelect').value); } finally { URL.revokeObjectURL(fileUrl); } }
+      else { const response = await fetch('/upload', { method: 'POST', body: form }); data = await response.json(); if (!response.ok) throw Error(data.error || 'Upload failed'); }
       await draw(data); drop.classList.add('hidden'); $('sidePanel').style.display = 'block';
     } catch (error) { alert(error.message); } finally { $('loadingOverlay').style.display = 'none'; }
   }
-  $('modelSelect').onchange = () => { $('zipdepthControls').style.display = $('modelSelect').value === 'depth' ? 'block' : 'none'; if (activeFile) upload(activeFile); };
+  $('modelSelect').onchange = () => { $('zipdepthControls').style.display = $('modelSelect').value === 'depth' ? 'block' : 'none'; $('midasTemporalControls').style.display = $('modelSelect').value === 'midas-v21-small-webgpu' ? 'block' : 'none'; if (activeFile) upload(activeFile); };
   $('modelSelect').onchange();
   $('zipInputSize').onchange = () => { if (activeFile && $('modelSelect').value === 'depth') upload(activeFile); };
   drop.onclick = () => file.click(); file.onchange = e => upload(e.target.files[0]);
@@ -236,7 +298,8 @@
     mainVideo.playing = true; updateVideoControls();
     if (!mainVideo.processing) processMainVideoFrame(mainVideo.frame);
   };
-  $('videoTimeline').oninput = () => { if (!mainVideo) return; mainVideo.playing = false; const frame = Number($('videoTimeline').value); updateVideoControls(); if (!mainVideo.processing) processMainVideoFrame(frame); };
+  $('videoTimeline').oninput = () => { if (!mainVideo) return; mainVideo.playing = false; mainVideo.previousDepth = null; mainVideo.previousDepthFrame = null; const frame = Number($('videoTimeline').value); updateVideoControls(); if (!mainVideo.processing) processMainVideoFrame(frame); };
+  $('midasTemporalSmoothing').oninput = () => { $('midasTemporalValue').textContent = `${Math.round(Number($('midasTemporalSmoothing').value) * 100)}%`; if (mainVideo) { mainVideo.previousDepth = null; mainVideo.previousDepthFrame = null; } };
   $('resetView').onclick = () => { camera.position.set(0, 0, 4); orbit.target.set(0, 0, 0); orbit.update(); };
   $('showSamLayers').onchange = e => world.children.filter(mesh => mesh.userData.kind === 'sam').forEach(mesh => mesh.visible = e.target.checked);
   $('showReferences').onchange = () => { refs.forEach(ref => { const inRange = !ref.video || !mainVideo || (mainVideo.frame >= ref.startFrame && mainVideo.frame <= ref.endFrame); const shown = ref.visible && $('showReferences').checked && inRange; ref.mesh.visible = ref.overlayMesh.visible = shown; ref.previewMesh.visible = shown && ref.showMask; }); };

@@ -200,21 +200,39 @@ def upload_video():
     })
 
 
-@app.route("/video/<video_id>/infer/<int:frame_index>", methods=["POST"])
-def infer_video_frame(video_id, frame_index):
+def read_video_frame(video_id, frame_index):
     filepath = video_sources.get(video_id)
     if not filepath or not os.path.isfile(filepath):
-        return jsonify({"error": "Video is unavailable"}), 404
+        return None, (jsonify({"error": "Video is unavailable"}), 404)
     capture = cv2.VideoCapture(filepath)
     frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     if frame_index < 0 or frame_index >= frame_count:
         capture.release()
-        return jsonify({"error": "Frame is outside video"}), 400
+        return None, (jsonify({"error": "Frame is outside video"}), 400)
     capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
     ok, frame = capture.read()
     capture.release()
     if not ok:
-        return jsonify({"error": "Cannot decode video frame"}), 500
+        return None, (jsonify({"error": "Cannot decode video frame"}), 500)
+    return frame, None
+
+
+@app.route("/video/<video_id>/frame/<int:frame_index>")
+def video_frame(video_id, frame_index):
+    frame, error = read_video_frame(video_id, frame_index)
+    if error:
+        return error
+    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if not ok:
+        return jsonify({"error": "Cannot encode video frame"}), 500
+    return send_file(io.BytesIO(encoded.tobytes()), mimetype="image/jpeg")
+
+
+@app.route("/video/<video_id>/infer/<int:frame_index>", methods=["POST"])
+def infer_video_frame(video_id, frame_index):
+    frame, error = read_video_frame(video_id, frame_index)
+    if error:
+        return error
     mode = request.form.get("mode", "segmentation")
     if mode not in {"segmentation", "depth"}:
         return jsonify({"error": "Invalid mode"}), 400
