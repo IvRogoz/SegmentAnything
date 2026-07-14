@@ -1,7 +1,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const file = $('fileInput'), drop = $('dropZone'), refs = new Map();
-  let source = null, activeFile = null, imageAspect = 1, referenceNumber = 0;
+  let source = null, activeFile = null, imageAspect = 1, referenceNumber = 0, mainVideo = null;
   const scene = new THREE.Scene();
   const viewHeight = 3.2;
   const camera = new THREE.OrthographicCamera(-viewHeight * innerWidth / innerHeight / 2, viewHeight * innerWidth / innerHeight / 2, viewHeight / 2, -viewHeight / 2, .1, 100);
@@ -20,7 +20,17 @@
   });
   function render() { requestAnimationFrame(render); orbit.update(); renderer.render(scene, camera); }
   render();
-  function clearWorld() { while (world.children.length) world.remove(world.children[0]); refs.forEach(r => { scene.remove(r.mesh); scene.remove(r.overlayMesh); scene.remove(r.previewMesh); }); refs.clear(); paintingLayer = null; $('brushOutline').style.display = 'none'; $('refLayerContainer').innerHTML = ''; referenceNumber = 0; }
+  function clearBaseWorld() { while (world.children.length) world.remove(world.children[0]); }
+  function clearWorld() { clearBaseWorld(); refs.forEach(r => { scene.remove(r.mesh); scene.remove(r.overlayMesh); scene.remove(r.previewMesh); if (r.videoUrl) URL.revokeObjectURL(r.videoUrl); }); refs.clear(); paintingLayer = null; $('brushOutline').style.display = 'none'; $('refLayerContainer').innerHTML = ''; referenceNumber = 0; }
+  const isVideoFile = selected => Boolean(selected && (selected.type || '').startsWith('video/'));
+  function updateVideoControls() {
+    const controls = $('videoControls');
+    if (!mainVideo) { controls.style.display = 'none'; return; }
+    controls.style.display = 'block';
+    $('videoTimeline').max = String(mainVideo.frameCount - 1); $('videoTimeline').value = String(mainVideo.frame);
+    $('videoFrameLabel').textContent = `Frame ${mainVideo.frame + 1} / ${mainVideo.frameCount}`;
+    $('videoPlayStop').textContent = mainVideo.playing ? 'Stop' : 'Play';
+  }
   function plane(width, height, map, z = 0) {
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), new THREE.MeshBasicMaterial({ map, transparent: true }));
     mesh.position.z = z; return mesh;
@@ -41,8 +51,8 @@
     positions.needsUpdate = true; geometry.computeVertexNormals();
     return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: color, side: THREE.DoubleSide }));
   }
-  async function draw(data) {
-    clearWorld(); source = data; imageAspect = data.shape[1] / data.shape[0];
+  async function draw(data, preserveLayers = false) {
+    if (preserveLayers) clearBaseWorld(); else clearWorld(); source = data; imageAspect = data.shape[1] / data.shape[0];
     $('executionProvider').textContent = data.mode === 'depth' ? 'ZipDepth' : 'SAM Segmentation';
     $('meshResolution').textContent = `${data.shape[1]} × ${data.shape[0]}`;
     $('rangeX').textContent = `-${(imageAspect * 1.35).toFixed(2)} … ${(imageAspect * 1.35).toFixed(2)}`;
@@ -59,17 +69,26 @@
   }
   async function addReference(fileToAdd) {
     if (!fileToAdd || !source) return;
-    const dataUrl = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(fileToAdd); });
-    const [image, tex] = await Promise.all([img(dataUrl), texture(dataUrl)]), width = 1.25, referenceAspect = tex.image.width / tex.image.height, height = width / referenceAspect;
+    const layerIsVideo = isVideoFile(fileToAdd);
+    let image, tex, video = null, videoUrl = null;
+    if (layerIsVideo) {
+      videoUrl = URL.createObjectURL(fileToAdd); video = document.createElement('video'); video.src = videoUrl; video.muted = true; video.playsInline = true; video.preload = 'auto';
+      await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = () => reject(new Error('Cannot decode layer video')); });
+      image = video; tex = new THREE.VideoTexture(video);
+    } else {
+      const dataUrl = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(fileToAdd); });
+      [image, tex] = await Promise.all([img(dataUrl), texture(dataUrl)]);
+    }
+    const width = 1.25, referenceAspect = (image.videoWidth || image.naturalWidth || tex.image.width) / (image.videoHeight || image.naturalHeight || tex.image.height), height = width / referenceAspect;
     const mesh = plane(width, height, tex, .3); mesh.visible = $('showReferences').checked; scene.add(mesh);
     const maskCanvas = document.createElement('canvas'), overlayCanvas = document.createElement('canvas');
-    const maskWidth = Math.min(image.naturalWidth || image.width, 1024), maskHeight = Math.round(maskWidth / referenceAspect);
+    const maskWidth = Math.min(image.videoWidth || image.naturalWidth || image.width, 1024), maskHeight = Math.round(maskWidth / referenceAspect);
     maskCanvas.width = overlayCanvas.width = maskWidth; maskCanvas.height = overlayCanvas.height = maskHeight;
     const maskContext = maskCanvas.getContext('2d'), overlayContext = overlayCanvas.getContext('2d');
     const overlayTexture = new THREE.CanvasTexture(overlayCanvas), overlayMesh = plane(width, height, overlayTexture, .3), previewTexture = new THREE.CanvasTexture(maskCanvas), previewMesh = plane(width, height, previewTexture, .3);
     overlayMesh.material.depthTest = false; overlayMesh.material.depthWrite = false; overlayMesh.material.alphaTest = 0.5; overlayMesh.renderOrder = 100; overlayMesh.visible = mesh.visible; scene.add(overlayMesh);
     previewMesh.material.color.set(0x3c9dff); previewMesh.material.opacity = .35; previewMesh.material.depthTest = false; previewMesh.material.depthWrite = false; previewMesh.renderOrder = 101; previewMesh.visible = mesh.visible; scene.add(previewMesh);
-    const id = ++referenceNumber, state = { mesh, overlayMesh, previewMesh, tex, overlayTexture, previewTexture, image, maskCanvas, maskContext, overlayCanvas, overlayContext, x: 0, y: 0, z: .3, scale: 1, rx: 0, ry: 0, rz: 0, brush: 80, visible: true, showMask: true, brushMode: 'paint' };
+    const id = ++referenceNumber, state = { mesh, overlayMesh, previewMesh, tex, overlayTexture, previewTexture, image, maskCanvas, maskContext, overlayCanvas, overlayContext, x: 0, y: 0, z: .3, scale: 1, rx: 0, ry: 0, rz: 0, brush: 80, visible: true, showMask: true, brushMode: 'paint', video, videoUrl, startFrame: 0, endFrame: Math.max(0, (mainVideo?.frameCount || 1) - 1) };
     refs.set(id, state);
     const card = document.createElement('div'); card.className = 'ref-layer-card';
     card.innerHTML = `<div class="ref-layer-header"><span>Layer ${id} <small>${fileToAdd.name}</small></span><button class="remove-layer-btn" type="button" title="Remove layer">×</button></div>
@@ -83,6 +102,7 @@
       <div class="layer-control"><label>Rotate Y</label><input type="range" class="layer-ry" min="-180" max="180" step="1" value="0"><output class="layer-ry-val">0°</output></div>
       <div class="layer-control"><label>Rotate Z</label><input type="range" class="layer-rz" min="-180" max="180" step="1" value="0"><output class="layer-rz-val">0°</output></div>`;
     card.insertAdjacentHTML('beforeend', `<div class="layer-separator">Depth mask</div><div class="mask-actions"><button type="button" class="mask-tool paint-mask">Paint mask</button><button type="button" class="mask-tool erase-mask">Erase mask</button><button type="button" class="clear-mask">Clear</button></div><label class="chk layer-toggle"><input type="checkbox" class="show-mask" checked> Show mask preview</label><div class="layer-control"><label>Brush radius</label><input type="range" class="brush-radius" min="4" max="250" step="1" value="80"><output class="brush-radius-val">80</output></div>`);
+    if (layerIsVideo) card.insertAdjacentHTML('beforeend', `<div class="layer-separator">Video sync</div><div class="video-sync-note">Main video frame range</div><div class="layer-control"><label>Start frame</label><input type="range" class="video-start" min="0" max="${state.endFrame}" step="1" value="0"><output class="video-start-val">0</output></div><div class="layer-control"><label>End frame</label><input type="range" class="video-end" min="0" max="${state.endFrame}" step="1" value="${state.endFrame}"><output class="video-end-val">${state.endFrame}</output></div>`);
     const update = () => { mesh.position.set(state.x, state.y, state.z); mesh.scale.setScalar(state.scale); mesh.rotation.set(state.rx, state.ry, state.rz); [overlayMesh, previewMesh].forEach(layer => { layer.position.copy(mesh.position); layer.scale.copy(mesh.scale); layer.rotation.copy(mesh.rotation); }); };
     const bind = (key, selector, output, radians = false) => { const control = card.querySelector(selector), value = card.querySelector(output); control.oninput = () => { const raw = Number(control.value); state[key] = radians ? raw * Math.PI / 180 : raw; value.textContent = radians ? `${raw.toFixed(0)}°` : raw.toFixed(2); update(); }; };
     bind('x', '.layer-x', '.layer-x-val'); bind('y', '.layer-y', '.layer-y-val'); bind('z', '.layer-z', '.layer-z-val'); bind('scale', '.layer-scale', '.layer-scale-val'); bind('rx', '.layer-rx', '.layer-rx-val', true); bind('ry', '.layer-ry', '.layer-ry-val', true); bind('rz', '.layer-rz', '.layer-rz-val', true);
@@ -94,7 +114,13 @@
     card.querySelector('.erase-mask').onclick = e => selectBrush('erase', e.currentTarget);
     card.querySelector('.clear-mask').onclick = () => { maskContext.clearRect(0, 0, maskWidth, maskHeight); redrawMask(state); };
     const brush = card.querySelector('.brush-radius'), brushValue = card.querySelector('.brush-radius-val'); brush.oninput = () => { state.brush = Number(brush.value); brushValue.textContent = String(state.brush); };
-    card.querySelector('.remove-layer-btn').onclick = () => { if (paintingLayer === state) { paintingLayer = null; renderer.domElement.style.cursor = ''; $('brushOutline').style.display = 'none'; } scene.remove(mesh); scene.remove(overlayMesh); scene.remove(previewMesh); tex.dispose(); overlayTexture.dispose(); previewTexture.dispose(); refs.delete(id); card.remove(); };
+    if (video) {
+      video.addEventListener('seeked', () => redrawMask(state));
+      const start = card.querySelector('.video-start'), end = card.querySelector('.video-end'), startValue = card.querySelector('.video-start-val'), endValue = card.querySelector('.video-end-val');
+      start.oninput = () => { state.startFrame = Math.min(Number(start.value), state.endFrame); start.value = String(state.startFrame); startValue.textContent = String(state.startFrame); syncLayerVideos(mainVideo?.frame ?? 0); };
+      end.oninput = () => { state.endFrame = Math.max(Number(end.value), state.startFrame); end.value = String(state.endFrame); endValue.textContent = String(state.endFrame); syncLayerVideos(mainVideo?.frame ?? 0); };
+    }
+    card.querySelector('.remove-layer-btn').onclick = () => { if (paintingLayer === state) { paintingLayer = null; renderer.domElement.style.cursor = ''; $('brushOutline').style.display = 'none'; } scene.remove(mesh); scene.remove(overlayMesh); scene.remove(previewMesh); tex.dispose(); overlayTexture.dispose(); previewTexture.dispose(); if (videoUrl) URL.revokeObjectURL(videoUrl); refs.delete(id); card.remove(); };
     $('refLayerContainer').append(card);
   }
   function redrawMask(state) {
@@ -105,6 +131,18 @@
     state.overlayContext.globalCompositeOperation = 'source-over';
     state.overlayTexture.needsUpdate = true;
     state.previewTexture.needsUpdate = true;
+  }
+  function syncLayerVideos(frame) {
+    if (!mainVideo) return;
+    refs.forEach(layer => {
+      if (!layer.video) return;
+      const inRange = frame >= layer.startFrame && frame <= layer.endFrame;
+      layer.mesh.visible = layer.overlayMesh.visible = layer.visible && $('showReferences').checked && inRange;
+      layer.previewMesh.visible = layer.visible && $('showReferences').checked && layer.showMask && inRange;
+      if (!inRange) { layer.video.pause(); return; }
+      const time = Math.min(layer.video.duration || 0, Math.max(0, (frame - layer.startFrame) / mainVideo.fps));
+      if (Math.abs(layer.video.currentTime - time) > .001) layer.video.currentTime = time;
+    });
   }
   function paintDepthMask(event, state) {
     if (!state) return;
@@ -140,9 +178,39 @@
   renderer.domElement.addEventListener('pointerdown', event => { if (!paintingLayer || event.button !== 0) return; isPainting = true; orbit.enabled = false; renderer.domElement.setPointerCapture(event.pointerId); updateBrushOutline(event); paintDepthMask(event, paintingLayer); });
   renderer.domElement.addEventListener('pointermove', event => { updateBrushOutline(event); if (isPainting) paintDepthMask(event, paintingLayer); });
   renderer.domElement.addEventListener('pointerup', event => { if (!isPainting || event.button !== 0) return; isPainting = false; orbit.enabled = true; renderer.domElement.releasePointerCapture(event.pointerId); });
+  async function processMainVideoFrame(frame) {
+    if (!mainVideo || mainVideo.processing || frame < 0 || frame >= mainVideo.frameCount) return;
+    mainVideo.processing = true; mainVideo.frame = frame; updateVideoControls();
+    try {
+      const form = new FormData(); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value);
+      const response = await fetch(`/video/${mainVideo.id}/infer/${frame}`, { method: 'POST', body: form }); const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'Frame processing failed');
+      await draw(data, true); syncLayerVideos(frame);
+    } catch (error) { mainVideo.playing = false; alert(error.message); }
+    finally {
+      if (!mainVideo) return;
+      mainVideo.processing = false; updateVideoControls();
+      if (mainVideo.playing && frame + 1 < mainVideo.frameCount) processMainVideoFrame(frame + 1);
+      else if (frame + 1 >= mainVideo.frameCount) { mainVideo.playing = false; updateVideoControls(); }
+    }
+  }
+  async function loadMainVideo(selected) {
+    activeFile = selected; mainVideo = null; clearWorld(); $('loadingOverlay').style.display = 'flex';
+    try {
+      const form = new FormData(); form.append('video', selected);
+      const response = await fetch('/video', { method: 'POST', body: form }); const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'Video upload failed');
+      mainVideo = { id: data.video_id, frameCount: data.frame_count, fps: data.fps, frame: 0, playing: false, processing: false, name: selected.name };
+      $('executionProvider').textContent = 'Video pending'; $('meshResolution').textContent = `${data.width} Ã— ${data.height}`; updateVideoControls(); drop.classList.add('hidden'); $('sidePanel').style.display = 'block';
+      await processMainVideoFrame(0);
+    } catch (error) { alert(error.message); mainVideo = null; updateVideoControls(); }
+    finally { $('loadingOverlay').style.display = 'none'; }
+  }
   async function upload(selected) {
     if (!selected) return;
+    if (isVideoFile(selected)) { await loadMainVideo(selected); return; }
     activeFile = selected;
+    mainVideo = null; updateVideoControls();
     $('loadingOverlay').style.display = 'flex';
     const form = new FormData(); form.append('image', selected); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value);
     try {
@@ -161,8 +229,16 @@
   $('loadAnother').onclick = () => file.click();
   $('addRefLayer').onclick = () => $('refFileInput').click();
   $('refFileInput').onchange = e => addReference(e.target.files[0]);
+  $('videoPlayStop').onclick = () => {
+    if (!mainVideo) return;
+    if (mainVideo.playing) { mainVideo.playing = false; updateVideoControls(); return; }
+    if (mainVideo.frame >= mainVideo.frameCount - 1) mainVideo.frame = 0;
+    mainVideo.playing = true; updateVideoControls();
+    if (!mainVideo.processing) processMainVideoFrame(mainVideo.frame);
+  };
+  $('videoTimeline').oninput = () => { if (!mainVideo) return; mainVideo.playing = false; const frame = Number($('videoTimeline').value); updateVideoControls(); if (!mainVideo.processing) processMainVideoFrame(frame); };
   $('resetView').onclick = () => { camera.position.set(0, 0, 4); orbit.target.set(0, 0, 0); orbit.update(); };
   $('showSamLayers').onchange = e => world.children.filter(mesh => mesh.userData.kind === 'sam').forEach(mesh => mesh.visible = e.target.checked);
-  $('showReferences').onchange = () => refs.forEach(ref => { const shown = ref.visible && $('showReferences').checked; ref.mesh.visible = ref.overlayMesh.visible = shown; ref.previewMesh.visible = shown && ref.showMask; });
+  $('showReferences').onchange = () => { refs.forEach(ref => { const inRange = !ref.video || !mainVideo || (mainVideo.frame >= ref.startFrame && mainVideo.frame <= ref.endFrame); const shown = ref.visible && $('showReferences').checked && inRange; ref.mesh.visible = ref.overlayMesh.visible = shown; ref.previewMesh.visible = shown && ref.showMask; }); };
   addEventListener('resize', () => { const half = viewHeight / 2, aspect = innerWidth / innerHeight; camera.left = -half * aspect; camera.right = half * aspect; camera.top = half; camera.bottom = -half; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 })();

@@ -19,9 +19,9 @@
         <div id="captureFrame"></div>
 
         <div id="dropZone">
-            <div id="dropText">Drop an Image</div>
+            <div id="dropText">Drop an Image or Video</div>
             <div id="dropSubtext">
-                Drop a JPG, PNG, WebP, AVIF, GIF, or BMP image.<br>
+                Drop an image or video. Video runs SAM or ZipDepth on every frame.<br>
                 Choose SAM Segmentation or ZipDepth before upload.<br>
                 <span style="opacity:.8">Click here to select a file</span>
             </div>
@@ -52,11 +52,16 @@
                 <div class="control-group">
                     <button id="loadAnother">Another Image</button>
                 </div>
+                <div class="control-group" id="videoControls" style="display:none">
+                    <label>Main video</label>
+                    <div class="video-transport"><button id="videoPlayStop" type="button">Play</button><output id="videoFrameLabel">Frame 0 / 0</output></div>
+                    <input id="videoTimeline" type="range" min="0" max="0" value="0" step="1">
+                </div>
                 <div class="control-group ref-layers-section">
                     <label>Layers</label>
                     <div id="refLayerContainer"></div>
                     <button id="addRefLayer">+ Add Layer</button>
-                    <input type="file" id="refFileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.avif,.gif,.bmp">
+                    <input type="file" id="refFileInput" accept="image/*,video/*">
                 </div>
                 <div class="control-group">
                     <label>Layer Model</label>
@@ -254,7 +259,7 @@
             </div>
         </div>
 
-        <input type="file" id="fileInput" accept="image/*,.jpg,.jpeg,.png,.webp,.avif,.gif,.bmp" />
+        <input type="file" id="fileInput" accept="image/*,video/*" />
     </div>
 
     <!-- Three.js and dependencies -->

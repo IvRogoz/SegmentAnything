@@ -732,3 +732,6 @@ input[type="checkbox"]:disabled {
 .mask-actions button { flex: 1; font-size: 11px; padding: 5px 7px; }
 .mask-actions .mask-tool.active { background: #2d68d5; border-color: #6f9eff; color: white; }
 #brushOutline { display: none; position: fixed; z-index: 50; border: 1px solid #69b9ff; border-radius: 50%; box-sizing: border-box; box-shadow: 0 0 0 1px rgba(0,0,0,.65); pointer-events: none; }
+.video-transport { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.video-transport output { font-size: 11px; color: var(--text-muted, #aab4c2); }
+.video-sync-note { margin: 6px 0 3px; font-size: 11px; color: var(--text-muted, #aab4c2); }
