@@ -19,11 +19,11 @@
         <div id="captureFrame"></div>
 
         <div id="dropZone">
-            <div id="dropText">Drop an Image or Video</div>
+            <div id="dropText">Drop an Image</div>
             <div id="dropSubtext">
-                Drop an image or video. Video runs SAM or ZipDepth on every frame.<br>
-                Choose SAM Segmentation or ZipDepth before upload.<br>
-                <span style="opacity:.8">Click here to select a file</span>
+                Drop an image. Video runs SAM or ZipDepth on every frame from its original local location.<br>
+                <button id="chooseLocalVideo" type="button">Choose Local Video</button><br>
+                <span style="opacity:.8">Click the area to select an image</span>
             </div>
         </div>
 
@@ -51,11 +51,18 @@
             <div class="control-panel">
                 <div class="control-group">
                     <button id="loadAnother">Another Image</button>
+                    <button id="chooseLocalVideoPanel" type="button">Choose Local Video</button>
                 </div>
                 <div class="control-group" id="videoControls" style="display:none">
                     <label>Main video</label>
                     <div class="video-transport"><button id="videoPlayStop" type="button">Play</button><output id="videoFrameLabel">Frame 0 / 0</output></div>
                     <input id="videoTimeline" type="range" min="0" max="0" value="0" step="1">
+                </div>
+                <div class="control-group" id="loadingProgress" style="display:none;">
+                    <label id="loadingText">EdgeTAM progress</label>
+                    <div class="progress">
+                        <div id="loadingBar" class="progress-bar"></div>
+                    </div>
                 </div>
                 <div class="control-group ref-layers-section">
                     <label>Layers</label>
@@ -67,10 +74,14 @@
                     <label>Layer Model</label>
                     <select id="modelSelect">
                         <option value="segmentation" selected>SAM Segmentation</option>
+                        <option value="edgetam">EdgeTAM</option>
                         <option value="depth">ZipDepth</option>
                         <option value="depth-anything-v2-small-webgpu">Depth Anything V2 Small — WebGPU</option>
                         <option value="midas-v21-small-webgpu">MiDaS v2.1 Small 256 — WebGPU</option>
                     </select>
+                </div>
+                <div class="control-group" id="inpaintingControls">
+                    <label class="chk"><input id="inpaintingToggle" type="checkbox"> Enable Inpainting</label>
                 </div>
                 <div class="control-group" id="zipdepthControls">
                     <label>ZipDepth Input Size</label>
@@ -239,13 +250,25 @@
             </div>
         </div>
 
+        <div id="edgetamPromptOverlay">
+            <div class="edgetam-prompt-dialog">
+                <div class="edgetam-prompt-title">Select object for EdgeTAM</div>
+                <div class="edgetam-prompt-help">Drag a bounding box around the prominent object to track.</div>
+                <div id="edgetamPromptStage">
+                    <img id="edgetamPromptImage" alt="EdgeTAM selection frame" draggable="false">
+                    <div id="edgetamPromptBox"></div>
+                </div>
+                <div class="edgetam-prompt-actions">
+                    <button id="edgetamPromptCancel" type="button">Cancel</button>
+                    <button id="edgetamPromptTrack" type="button" disabled>Track Object</button>
+                </div>
+            </div>
+        </div>
+
         <div id="loadingOverlay">
             <div class="loader">
                 <div class="spinner"></div>
-                <div id="loadingText">Loading...</div>
-                <div id="loadingProgress" class="progress" style="display:none;">
-                    <div id="loadingBar" class="progress-bar"></div>
-                </div>
+                <div>Loading...</div>
             </div>
         </div>
 

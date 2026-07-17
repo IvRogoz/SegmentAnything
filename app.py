@@ -4,12 +4,16 @@ import cv2
 import numpy as np
 import torch
 from flask import Flask, render_template, request, jsonify, send_file
+from werkzeug.exceptions import RequestEntityTooLarge
 from ultralytics import SAM
 from PIL import Image
 from simple_lama_inpainting import SimpleLama
 from zipdepth.inference.predictor import DepthInference
 import base64
 import io
+import json
+import threading
+import time
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -18,6 +22,45 @@ os.makedirs("uploads", exist_ok=True)
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
 video_sources = {}
+edgetam_video_sessions = {}
+edgetam_model_lock = threading.Lock()
+edgetam_inference_lock = threading.Lock()
+edgetam_image_predictor = None
+edgetam_video_predictor = None
+progress_jobs = {}
+progress_jobs_lock = threading.Lock()
+
+
+def set_job_progress(job_id, percent, label="Processing"):
+    if not job_id:
+        return
+    now = time.monotonic()
+    with progress_jobs_lock:
+        expired = [
+            key for key, value in progress_jobs.items()
+            if now - value["updated"] > 300
+        ]
+        for key in expired:
+            progress_jobs.pop(key, None)
+        progress_jobs[job_id] = {
+            "percent": max(0, min(100, int(round(percent)))),
+            "label": label,
+            "updated": now,
+        }
+
+
+@app.route("/progress/<job_id>")
+def job_progress(job_id):
+    with progress_jobs_lock:
+        status = progress_jobs.get(job_id)
+    if status is None:
+        return jsonify({"percent": 0, "label": "Starting EdgeTAM"})
+    return jsonify({"percent": status["percent"], "label": status["label"]})
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def upload_too_large(_error):
+    return jsonify({"error": "Upload exceeds the server limit. Choose Local Video to use the original file without uploading it."}), 413
 
 
 @app.after_request
@@ -34,6 +77,198 @@ depth_model = DepthInference(
     input_size=384,
     warmup_iters=1,
 )
+
+
+class LazyOpenCVVideoFrames:
+    """Decode only the EdgeTAM frame currently requested; never extract frames to disk."""
+
+    def __init__(self, filepath, image_size, offload_video_to_cpu, compute_device):
+        self.filepath = filepath
+        self.image_size = image_size
+        self.offload_video_to_cpu = offload_video_to_cpu
+        self.compute_device = compute_device
+        self.capture = cv2.VideoCapture(filepath)
+        if not self.capture.isOpened():
+            raise RuntimeError("EdgeTAM cannot open the video")
+        self.frame_count = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.video_width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.video_height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.next_frame = 0
+        self.lock = threading.Lock()
+        self.mean = torch.tensor((0.485, 0.456, 0.406), dtype=torch.float32)[:, None, None]
+        self.std = torch.tensor((0.229, 0.224, 0.225), dtype=torch.float32)[:, None, None]
+
+    def __len__(self):
+        return self.frame_count
+
+    def __getitem__(self, index):
+        if index < 0 or index >= self.frame_count:
+            raise IndexError(index)
+        with self.lock:
+            if index != self.next_frame:
+                self.capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok, frame = self.capture.read()
+            self.next_frame = index + 1
+        if not ok:
+            raise RuntimeError(f"EdgeTAM cannot decode video frame {index}")
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb = cv2.resize(rgb, (self.image_size, self.image_size), interpolation=cv2.INTER_LINEAR)
+        tensor = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0
+        tensor = (tensor - self.mean) / self.std
+        if not self.offload_video_to_cpu:
+            tensor = tensor.to(self.compute_device, non_blocking=True)
+        return tensor
+
+    def close(self):
+        with self.lock:
+            self.capture.release()
+
+
+def load_edgetam_video_frames(video_path, image_size, offload_video_to_cpu, **kwargs):
+    loader = LazyOpenCVVideoFrames(
+        video_path,
+        image_size,
+        offload_video_to_cpu,
+        kwargs.get("compute_device", torch.device("cuda")),
+    )
+    return loader, loader.video_height, loader.video_width
+
+
+def get_edgetam_models():
+    global edgetam_image_predictor, edgetam_video_predictor
+    if not torch.cuda.is_available():
+        raise RuntimeError("EdgeTAM requires CUDA; CPU fallback is disabled")
+    if edgetam_image_predictor is not None and edgetam_video_predictor is not None:
+        return edgetam_image_predictor, edgetam_video_predictor
+    with edgetam_model_lock:
+        if edgetam_image_predictor is None or edgetam_video_predictor is None:
+            from sam2.build_sam import build_sam2, build_sam2_video_predictor
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+            import sam2.sam2_video_predictor as video_predictor_module
+
+            edge_root = os.path.join("vendor", "EdgeTAM")
+            checkpoint = os.path.join(edge_root, "checkpoints", "edgetam.pt")
+            video_predictor_module.load_video_frames = load_edgetam_video_frames
+            image_model = build_sam2(
+                "edgetam.yaml",
+                checkpoint,
+                device="cuda",
+                apply_postprocessing=False,
+            )
+            edgetam_image_predictor = SAM2ImagePredictor(image_model)
+            edgetam_video_predictor = build_sam2_video_predictor(
+                "edgetam.yaml",
+                checkpoint,
+                device="cuda",
+            )
+    return edgetam_image_predictor, edgetam_video_predictor
+
+
+def segment_image_edgetam(image, box, job_id=None):
+    image_predictor, _ = get_edgetam_models()
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    with edgetam_inference_lock, torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        set_job_progress(job_id, 20, "Encoding EdgeTAM frame")
+        image_predictor.set_image(rgb)
+        set_job_progress(job_id, 70, "Segmenting selected object")
+        masks, scores, _logits = image_predictor.predict(
+            box=np.asarray(box, dtype=np.float32),
+            multimask_output=True,
+        )
+        best = int(np.argmax(scores))
+        selected_mask = masks[best].astype(np.float32)
+        selected_score = float(scores[best])
+        image_predictor.reset_predictor()
+    set_job_progress(job_id, 95, "Encoding selected object")
+    return [selected_mask], [selected_score], image.shape[:2]
+
+
+def release_edgetam_video_session(video_id):
+    session = edgetam_video_sessions.pop(video_id, None)
+    if session is None:
+        return
+    images = session["state"].get("images")
+    if hasattr(images, "close"):
+        images.close()
+    del session
+    torch.cuda.empty_cache()
+
+
+def clear_edgetam_video_sessions():
+    for video_id in list(edgetam_video_sessions):
+        release_edgetam_video_session(video_id)
+
+
+def segment_video_frame_edgetam(video_id, frame_index, box=None, job_id=None):
+    filepath = video_sources[video_id]
+    with edgetam_inference_lock, torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        session = edgetam_video_sessions.get(video_id)
+        if session is None:
+            if box is None:
+                raise ValueError("EdgeTAM requires a bounding box on frame 1")
+            _image_predictor, predictor = get_edgetam_models()
+            set_job_progress(job_id, 20, "Initializing EdgeTAM video")
+            state = predictor.init_state(
+                video_path=filepath,
+                offload_video_to_cpu=True,
+                offload_state_to_cpu=True,
+            )
+            set_job_progress(job_id, 60, "Selecting object from bounding box")
+            _output_frame, _object_ids, mask_logits = predictor.add_new_points_or_box(
+                inference_state=state,
+                frame_idx=0,
+                obj_id=0,
+                box=np.asarray(box, dtype=np.float32),
+            )
+            initial_masks = [(mask_logits[0, 0] > 0.0).cpu().numpy().astype(np.float32)]
+            scores = [1.0]
+            set_job_progress(job_id, 95, "Object selected for tracking")
+            session = {
+                "predictor": predictor,
+                "state": state,
+                "initial_masks": initial_masks,
+                "scores": scores,
+                "last_frame": 0,
+            }
+            edgetam_video_sessions[video_id] = session
+
+        if frame_index == 0:
+            return session["initial_masks"], session["scores"]
+        if not session["initial_masks"]:
+            return [], []
+
+        predictor = session["predictor"]
+        state = session["state"]
+        if frame_index > session["last_frame"]:
+            start_frame = session["last_frame"] + 1
+            frames_to_track = frame_index - start_frame
+        else:
+            start_frame = frame_index
+            frames_to_track = 0
+
+        target_masks = None
+        expected_outputs = max(1, frames_to_track + 1)
+        completed_outputs = 0
+        for output_frame, _object_ids, mask_logits in predictor.propagate_in_video(
+            state,
+            start_frame_idx=start_frame,
+            max_frame_num_to_track=frames_to_track,
+        ):
+            completed_outputs += 1
+            set_job_progress(
+                job_id,
+                99 * completed_outputs / expected_outputs,
+                "Propagating EdgeTAM masks",
+            )
+            if output_frame == frame_index:
+                target_masks = [
+                    (mask_logits[index, 0] > 0.0).cpu().numpy().astype(np.float32)
+                    for index in range(mask_logits.shape[0])
+                ]
+        if target_masks is None:
+            raise RuntimeError(f"EdgeTAM did not produce frame {frame_index}")
+        session["last_frame"] = max(session["last_frame"], frame_index)
+        return target_masks, session["scores"]
 
 
 def remove_duplicate_masks(masks, scores):
@@ -110,12 +345,19 @@ def extract_object_rgba(orig_rgb, mask, feather_radius=2):
     return rgba
 
 
-def infer_image_array(orig, mode, input_size, image_id):
+def infer_image_array(orig, mode, input_size, image_id, segmentation_result=None, inpainting=False, job_id=None, edgetam_box=None):
     """Infer from an already decoded OpenCV BGR image; never writes a frame to disk."""
     if mode == "depth":
         depth_model.input_size = input_size
         depth_map, shape = estimate_depth(orig)
         masks, scores = [], []
+    elif segmentation_result is not None:
+        masks, scores = segmentation_result
+        shape = orig.shape[:2]
+    elif mode == "edgetam":
+        if edgetam_box is None:
+            raise ValueError("EdgeTAM requires a bounding box")
+        masks, scores, shape = segment_image_edgetam(orig, edgetam_box, job_id=job_id)
     else:
         masks, scores, shape = segment_image(orig)
     orig_rgb = cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
@@ -133,7 +375,7 @@ def infer_image_array(orig, mode, input_size, image_id):
             "area": area,
             "score": round(score, 3)
         })
-    if mode == "segmentation":
+    if mode != "depth" and inpainting:
         mask_list.sort(key=lambda m: m["area"], reverse=True)
         combined_mask = np.zeros((h, w), dtype=np.uint8)
         for mask in masks:
@@ -179,6 +421,12 @@ def upload_video():
     video_id = str(uuid.uuid4())
     filepath = os.path.join("uploads", f"{video_id}{ext}")
     file.save(filepath)
+    return register_video_source(filepath)
+
+
+def register_video_source(filepath):
+    clear_edgetam_video_sessions()
+    video_id = str(uuid.uuid4())
     capture = cv2.VideoCapture(filepath)
     if not capture.isOpened():
         capture.release()
@@ -200,6 +448,28 @@ def upload_video():
     })
 
 
+@app.route("/video/select-local", methods=["POST"])
+def select_local_video():
+    """Open a native Windows picker and keep the original video path only."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        filepath = filedialog.askopenfilename(
+            title="Choose Local Video",
+            filetypes=[("Video files", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v"), ("All files", "*.*")],
+        )
+        root.destroy()
+    except Exception as error:
+        return jsonify({"error": f"Cannot open the native video picker: {error}"}), 500
+
+    if not filepath:
+        return jsonify({"error": "No video selected"}), 400
+    return register_video_source(filepath)
+
+
 def read_video_frame(video_id, frame_index):
     filepath = video_sources.get(video_id)
     if not filepath or not os.path.isfile(filepath):
@@ -215,6 +485,25 @@ def read_video_frame(video_id, frame_index):
     if not ok:
         return None, (jsonify({"error": "Cannot decode video frame"}), 500)
     return frame, None
+
+
+def parse_edgetam_box(raw_box, width, height):
+    if not raw_box:
+        return None
+    try:
+        values = [float(value) for value in json.loads(raw_box)]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError("Invalid EdgeTAM bounding box")
+    if len(values) != 4 or not all(np.isfinite(values)):
+        raise ValueError("Invalid EdgeTAM bounding box")
+    x1, y1, x2, y2 = values
+    x1 = max(0.0, min(float(width - 1), x1))
+    y1 = max(0.0, min(float(height - 1), y1))
+    x2 = max(0.0, min(float(width - 1), x2))
+    y2 = max(0.0, min(float(height - 1), y2))
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("EdgeTAM bounding box must have positive width and height")
+    return [x1, y1, x2, y2]
 
 
 @app.route("/video/<video_id>/frame/<int:frame_index>")
@@ -234,14 +523,44 @@ def infer_video_frame(video_id, frame_index):
     if error:
         return error
     mode = request.form.get("mode", "segmentation")
-    if mode not in {"segmentation", "depth"}:
+    if mode not in {"segmentation", "depth", "edgetam"}:
         return jsonify({"error": "Invalid mode"}), 400
     input_size = int(request.form.get("input_size", 384))
+    inpainting = request.form.get("inpainting", "false").lower() == "true"
+    job_id = request.form.get("job_id")
+    set_job_progress(job_id, 0, "Starting EdgeTAM")
     if input_size not in {384, 512, 768}:
         return jsonify({"error": "Invalid ZipDepth input size"}), 400
     try:
-        return jsonify(infer_image_array(frame, mode, input_size, f"{video_id}:{frame_index}"))
+        if mode == "edgetam":
+            box = parse_edgetam_box(request.form.get("box"), frame.shape[1], frame.shape[0])
+            masks, scores = segment_video_frame_edgetam(
+                video_id,
+                frame_index,
+                box=box,
+                job_id=job_id,
+            )
+            result = infer_image_array(
+                frame,
+                mode,
+                input_size,
+                f"{video_id}:{frame_index}",
+                segmentation_result=(masks, scores),
+                inpainting=inpainting,
+                job_id=job_id,
+            )
+            set_job_progress(job_id, 100, "EdgeTAM complete")
+            return jsonify(result)
+        release_edgetam_video_session(video_id)
+        return jsonify(infer_image_array(
+            frame,
+            mode,
+            input_size,
+            f"{video_id}:{frame_index}",
+            inpainting=inpainting,
+        ))
     except Exception as e:
+        set_job_progress(job_id, 100, "EdgeTAM failed")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -259,9 +578,12 @@ def upload():
     filepath = os.path.join("uploads", filename)
     file.save(filepath)
     mode = request.form.get("mode", "segmentation")
-    if mode not in {"segmentation", "depth"}:
+    if mode not in {"segmentation", "depth", "edgetam"}:
         return jsonify({"error": "Invalid mode"}), 400
     input_size = int(request.form.get("input_size", 384))
+    inpainting = request.form.get("inpainting", "false").lower() == "true"
+    job_id = request.form.get("job_id")
+    set_job_progress(job_id, 0, "Starting EdgeTAM")
     if input_size not in {384, 512, 768}:
         return jsonify({"error": "Invalid ZipDepth input size"}), 400
 
@@ -269,9 +591,23 @@ def upload():
         orig = cv2.imread(filepath)
         if orig is None:
             return jsonify({"error": "Cannot decode image"}), 400
-        return jsonify(infer_image_array(orig, mode, input_size, filename))
+        box = parse_edgetam_box(request.form.get("box"), orig.shape[1], orig.shape[0])
+        if mode == "edgetam" and box is None:
+            return jsonify({"error": "EdgeTAM requires a bounding box"}), 400
+        result = infer_image_array(
+            orig,
+            mode,
+            input_size,
+            filename,
+            inpainting=inpainting,
+            job_id=job_id,
+            edgetam_box=box,
+        )
+        set_job_progress(job_id, 100, "EdgeTAM complete")
+        return jsonify(result)
 
     except Exception as e:
+        set_job_progress(job_id, 100, "EdgeTAM failed")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

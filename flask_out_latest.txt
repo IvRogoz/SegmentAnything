@@ -1,7 +1,0 @@
-Loading ZipDepth-base...
-Fusing model for inference...
-  Device:   cpu  |  fused FP32  |  loader: cv2
-  Input:    shorter side >= 384, aligned to 32
-  Warmup:   1 iters at 672×384  — ready
- * Serving Flask app 'app'
- * Debug mode: off

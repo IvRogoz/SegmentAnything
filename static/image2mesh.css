@@ -549,6 +549,15 @@ input[type="checkbox"]:disabled {
     transition: width 0.2s ease;
 }
 
+#sidePanel #loadingProgress {
+    pointer-events: none;
+}
+
+#sidePanel #loadingProgress .progress {
+    width: 100%;
+    margin: 8px 0 0;
+}
+
 #canvas {
     display: block;
     width: 100%;
@@ -710,6 +719,69 @@ input[type="checkbox"]:disabled {
 }
 #refLayerContainer {
     margin-bottom: 6px;
+}
+
+#edgetamPromptOverlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.82);
+    z-index: 2100;
+}
+
+.edgetam-prompt-dialog {
+    max-width: 92vw;
+    max-height: 94vh;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface-strong);
+    color: var(--text);
+}
+
+.edgetam-prompt-title {
+    font-size: 17px;
+    font-weight: 700;
+}
+
+.edgetam-prompt-help {
+    margin: 5px 0 12px;
+    color: var(--muted);
+}
+
+#edgetamPromptStage {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+    cursor: crosshair;
+    user-select: none;
+    touch-action: none;
+}
+
+#edgetamPromptImage {
+    display: block;
+    max-width: 86vw;
+    max-height: 72vh;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+#edgetamPromptBox {
+    position: absolute;
+    display: none;
+    border: 2px solid #20a4ff;
+    background: rgba(32, 164, 255, 0.16);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85);
+    pointer-events: none;
+}
+
+.edgetam-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
 }
 
 /* Removed MoGe-only controls: SegmentAnything uses SAM and ZipDepth. */

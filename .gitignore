@@ -4,17 +4,38 @@ __pycache__/
 
 # Local application output
 *.log
+*.err
+*.out
 err.txt
 flask_err*.txt
 flask_out*.txt
+logs/
 
 # Local test and UI-capture artifacts
 shapes*.jpg
+test*.jpg
+test*.py
+tests/
 test_inpainted.jpg
 ui-check*.png
 
 # User-uploaded media
 uploads/
+*.mp4
 
 # Local agent instructions
 AGENTS.md
+**/AGENTS.md
+
+# EdgeTAM repository content not used by this application
+vendor/EdgeTAM/assets/
+vendor/EdgeTAM/coreml/
+vendor/EdgeTAM/examples/
+vendor/EdgeTAM/notebooks/
+vendor/EdgeTAM/tools/
+vendor/EdgeTAM/CODE_OF_CONDUCT.md
+vendor/EdgeTAM/CONTRIBUTING.md
+vendor/EdgeTAM/convert_weights.py
+vendor/EdgeTAM/download_ckpts.sh
+vendor/EdgeTAM/gradio_app.py
+vendor/EdgeTAM/checkpoints/download_ckpts.sh

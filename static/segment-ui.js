@@ -1,7 +1,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const file = $('fileInput'), drop = $('dropZone'), refs = new Map();
-  let source = null, activeFile = null, imageAspect = 1, referenceNumber = 0, mainVideo = null;
+  let source = null, activeFile = null, activeEdgeTamBox = null, imageAspect = 1, referenceNumber = 0, mainVideo = null;
   const browserDepthModels = {
     'depth-anything-v2-small-webgpu': { label: 'Depth Anything V2 Small', url: '/static/models/depth_anything_v2_vits.onnx', size: 518, order: 'rgb', mean: [123.675, 116.28, 103.53], std: [58.395, 57.12, 57.375], byteScale: true },
     'midas-v21-small-webgpu': { label: 'MiDaS v2.1 Small 256', url: '/static/models/midas_v21_small_256.onnx', size: 256, order: 'bgr', mean: [.485, .456, .406], std: [.229, .224, .225], byteScale: false }
@@ -25,6 +25,33 @@
   });
   const isBrowserDepthModel = () => Boolean(browserDepthModels[$('modelSelect').value]);
   const waitFor = (element, event) => new Promise((resolve, reject) => { const done = () => { element.removeEventListener(event, done); element.removeEventListener('error', fail); resolve(); }; const fail = () => { element.removeEventListener(event, done); reject(new Error('Cannot decode video')); }; element.addEventListener(event, done, { once: true }); element.addEventListener('error', fail, { once: true }); });
+  async function selectEdgeTamBox(imageUrl) {
+    const overlay = $('edgetamPromptOverlay'), stage = $('edgetamPromptStage'), promptImage = $('edgetamPromptImage'), promptBox = $('edgetamPromptBox'), track = $('edgetamPromptTrack'), cancel = $('edgetamPromptCancel');
+    promptImage.src = imageUrl;
+    if (!promptImage.complete || !promptImage.naturalWidth) await waitFor(promptImage, 'load');
+    overlay.style.display = 'flex'; promptBox.style.display = 'none'; track.disabled = true;
+    let dragging = false, start = null, selection = null;
+    const point = event => { const bounds = stage.getBoundingClientRect(); return { x: Math.max(0, Math.min(bounds.width, event.clientX - bounds.left)), y: Math.max(0, Math.min(bounds.height, event.clientY - bounds.top)), bounds }; };
+    const drawSelection = current => {
+      const left = Math.min(start.x, current.x), top = Math.min(start.y, current.y), width = Math.abs(current.x - start.x), height = Math.abs(current.y - start.y);
+      selection = { left, top, width, height };
+      promptBox.style.display = 'block'; promptBox.style.left = `${left}px`; promptBox.style.top = `${top}px`; promptBox.style.width = `${width}px`; promptBox.style.height = `${height}px`;
+      track.disabled = width < 4 || height < 4;
+    };
+    return new Promise(resolve => {
+      const cleanup = result => { dragging = false; overlay.style.display = 'none'; promptBox.style.display = 'none'; stage.onpointerdown = stage.onpointermove = stage.onpointerup = stage.onpointercancel = null; track.onclick = cancel.onclick = null; resolve(result); };
+      stage.onpointerdown = event => { if (event.button !== 0) return; event.preventDefault(); dragging = true; start = point(event); stage.setPointerCapture(event.pointerId); drawSelection(start); };
+      stage.onpointermove = event => { if (dragging) drawSelection(point(event)); };
+      stage.onpointerup = event => { if (!dragging || event.button !== 0) return; drawSelection(point(event)); dragging = false; stage.releasePointerCapture(event.pointerId); };
+      stage.onpointercancel = () => { dragging = false; };
+      cancel.onclick = () => cleanup(null);
+      track.onclick = () => {
+        if (!selection || track.disabled) return;
+        const bounds = stage.getBoundingClientRect(), scaleX = promptImage.naturalWidth / bounds.width, scaleY = promptImage.naturalHeight / bounds.height;
+        cleanup([selection.left * scaleX, selection.top * scaleY, (selection.left + selection.width) * scaleX, (selection.top + selection.height) * scaleY]);
+      };
+    });
+  }
   async function browserDepthSession(modelId) {
     if (!navigator.gpu) throw Error('WebGPU is unavailable. This model has no fallback.');
     if (browserDepthSessions.has(modelId)) return browserDepthSessions.get(modelId);
@@ -71,6 +98,46 @@
   function clearBaseWorld() { while (world.children.length) world.remove(world.children[0]); }
   function clearWorld() { clearBaseWorld(); refs.forEach(r => { scene.remove(r.mesh); scene.remove(r.overlayMesh); scene.remove(r.previewMesh); if (r.videoUrl) URL.revokeObjectURL(r.videoUrl); }); refs.clear(); paintingLayer = null; $('brushOutline').style.display = 'none'; $('refLayerContainer').innerHTML = ''; referenceNumber = 0; }
   const isVideoFile = selected => Boolean(selected && (selected.type || '').startsWith('video/'));
+  async function jsonResponse(response) {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) return response.json();
+    const text = await response.text();
+    return { error: response.status === 413 ? 'Video upload is too large. Choose Local Video to use the original file without uploading it.' : `Server returned ${response.status}: ${text.slice(0, 160)}` };
+  }
+  let progressPollId = 0;
+  const createJobId = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  function startRealProgress(jobId) {
+    const pollId = ++progressPollId;
+    $('sidePanel').style.display = 'block';
+    $('loadingProgress').style.display = 'block';
+    $('loadingBar').style.width = '0%';
+    $('loadingText').textContent = 'Starting EdgeTAM — 0%';
+    const poll = async () => {
+      while (pollId === progressPollId) {
+        try {
+          const response = await fetch(`/progress/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+          if (response.ok) {
+            const status = await response.json();
+            const percent = Math.max(0, Math.min(100, Number(status.percent) || 0));
+            $('loadingBar').style.width = `${percent}%`;
+            $('loadingText').textContent = `${status.label} — ${Math.round(percent)}%`;
+          }
+        } catch (_) {}
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    };
+    poll();
+    return success => {
+      if (pollId !== progressPollId) return;
+      progressPollId++;
+      if (success) {
+        $('loadingBar').style.width = '100%';
+        $('loadingText').textContent = 'EdgeTAM complete — 100%';
+      }
+      $('loadingProgress').style.display = 'none';
+      $('loadingText').textContent = 'EdgeTAM progress';
+    };
+  }
   function updateVideoControls() {
     const controls = $('videoControls');
     if (!mainVideo) { controls.style.display = 'none'; return; }
@@ -101,7 +168,7 @@
   }
   async function draw(data, preserveLayers = false) {
     if (!preserveLayers) clearWorld(); source = data; imageAspect = data.shape[1] / data.shape[0];
-    $('executionProvider').textContent = data.mode === 'depth' ? 'ZipDepth' : 'SAM Segmentation';
+    $('executionProvider').textContent = data.mode === 'depth' ? 'ZipDepth' : data.mode === 'edgetam' ? 'EdgeTAM' : 'SAM Segmentation';
     $('meshResolution').textContent = `${data.shape[1]} × ${data.shape[0]}`;
     $('rangeX').textContent = `-${(imageAspect * 1.35).toFixed(2)} … ${(imageAspect * 1.35).toFixed(2)}`;
     $('rangeY').textContent = '-1.35 … 1.35';
@@ -232,7 +299,19 @@
   renderer.domElement.addEventListener('pointerup', event => { if (!isPainting || event.button !== 0) return; isPainting = false; orbit.enabled = true; renderer.domElement.releasePointerCapture(event.pointerId); });
   async function processMainVideoFrame(frame) {
     if (!mainVideo || mainVideo.processing || frame < 0 || frame >= mainVideo.frameCount) return;
+    if ($('modelSelect').value === 'edgetam' && !mainVideo.edgeTamBox) {
+      const promptResponse = await fetch(`/video/${mainVideo.id}/frame/0`);
+      if (!promptResponse.ok) { const error = await promptResponse.json(); alert(error.error || 'Cannot decode video frame 1'); return; }
+      const promptUrl = URL.createObjectURL(await promptResponse.blob());
+      try { mainVideo.edgeTamBox = await selectEdgeTamBox(promptUrl); }
+      finally { URL.revokeObjectURL(promptUrl); }
+      if (!mainVideo.edgeTamBox) return;
+    }
     mainVideo.processing = true; mainVideo.frame = frame; updateVideoControls();
+    const useRealProgress = $('modelSelect').value === 'edgetam';
+    const jobId = useRealProgress ? createJobId() : null;
+    const stopProgress = useRealProgress ? startRealProgress(jobId) : null;
+    let completed = false;
     try {
       let data;
       if (isBrowserDepthModel()) {
@@ -242,13 +321,14 @@
         try { data = await inferBrowserDepth(await img(frameUrl), $('modelSelect').value, mainVideo, frame); }
         finally { URL.revokeObjectURL(frameUrl); }
       } else {
-        const form = new FormData(); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value);
-        const response = await fetch(`/video/${mainVideo.id}/infer/${frame}`, { method: 'POST', body: form }); data = await response.json();
+        const form = new FormData(); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value); form.append('inpainting', String($('inpaintingToggle').checked)); if (jobId) form.append('job_id', jobId); if (mainVideo.edgeTamBox) form.append('box', JSON.stringify(mainVideo.edgeTamBox));
+        const response = await fetch(`/video/${mainVideo.id}/infer/${frame}`, { method: 'POST', body: form }); data = await jsonResponse(response);
         if (!response.ok) throw Error(data.error || 'Frame processing failed');
       }
-      await draw(data, true); syncLayerVideos(frame);
+      await draw(data, true); syncLayerVideos(frame); completed = true;
     } catch (error) { mainVideo.playing = false; alert(error.message); }
     finally {
+      if (stopProgress) stopProgress(completed);
       if (!mainVideo) return;
       mainVideo.processing = false; updateVideoControls();
       if (mainVideo.playing && frame + 1 < mainVideo.frameCount) processMainVideoFrame(frame + 1);
@@ -259,36 +339,67 @@
     activeFile = selected; if (mainVideo?.browserVideoUrl) URL.revokeObjectURL(mainVideo.browserVideoUrl); mainVideo = null; clearWorld(); $('loadingOverlay').style.display = 'flex';
     try {
       const form = new FormData(); form.append('video', selected);
-      const response = await fetch('/video', { method: 'POST', body: form }); const data = await response.json();
+      const response = await fetch('/video', { method: 'POST', body: form }); const data = await jsonResponse(response);
       if (!response.ok) throw Error(data.error || 'Video upload failed');
-      mainVideo = { id: data.video_id, frameCount: data.frame_count, fps: data.fps, frame: 0, playing: false, processing: false, name: selected.name, browserVideo: null, browserVideoUrl: null };
+      mainVideo = { id: data.video_id, frameCount: data.frame_count, fps: data.fps, frame: 0, playing: false, processing: false, name: selected.name, browserVideo: null, browserVideoUrl: null, edgeTamBox: null };
       $('executionProvider').textContent = 'Video pending'; $('meshResolution').textContent = `${data.width} Ã— ${data.height}`; updateVideoControls(); drop.classList.add('hidden'); $('sidePanel').style.display = 'block';
+      if ($('modelSelect').value === 'edgetam') $('loadingOverlay').style.display = 'none';
       await processMainVideoFrame(0);
     } catch (error) { alert(error.message); mainVideo = null; updateVideoControls(); }
     finally { $('loadingOverlay').style.display = 'none'; }
   }
   async function upload(selected) {
     if (!selected) return;
-    if (isVideoFile(selected)) { await loadMainVideo(selected); return; }
+    if (isVideoFile(selected)) { alert('Choose Local Video. Main videos are read from their original local path and are not uploaded.'); return; }
+    if (activeFile !== selected) activeEdgeTamBox = null;
     activeFile = selected;
     mainVideo = null; updateVideoControls();
-    $('loadingOverlay').style.display = 'flex';
-    const form = new FormData(); form.append('image', selected); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value);
+    if ($('modelSelect').value === 'edgetam' && !activeEdgeTamBox) {
+      const promptUrl = URL.createObjectURL(selected);
+      try { activeEdgeTamBox = await selectEdgeTamBox(promptUrl); }
+      finally { URL.revokeObjectURL(promptUrl); }
+      if (!activeEdgeTamBox) return;
+    }
+    const useRealProgress = $('modelSelect').value === 'edgetam';
+    $('loadingOverlay').style.display = useRealProgress ? 'none' : 'flex';
+    const jobId = useRealProgress ? createJobId() : null;
+    const stopProgress = useRealProgress ? startRealProgress(jobId) : null;
+    let completed = false;
+    const form = new FormData(); form.append('image', selected); form.append('mode', $('modelSelect').value); form.append('input_size', $('zipInputSize').value); form.append('inpainting', String($('inpaintingToggle').checked)); if (jobId) form.append('job_id', jobId); if (activeEdgeTamBox) form.append('box', JSON.stringify(activeEdgeTamBox));
     try {
       let data;
       if (isBrowserDepthModel()) { const fileUrl = URL.createObjectURL(selected); try { data = await inferBrowserDepth(await img(fileUrl), $('modelSelect').value); } finally { URL.revokeObjectURL(fileUrl); } }
-      else { const response = await fetch('/upload', { method: 'POST', body: form }); data = await response.json(); if (!response.ok) throw Error(data.error || 'Upload failed'); }
-      await draw(data); drop.classList.add('hidden'); $('sidePanel').style.display = 'block';
-    } catch (error) { alert(error.message); } finally { $('loadingOverlay').style.display = 'none'; }
+      else { const response = await fetch('/upload', { method: 'POST', body: form }); data = await jsonResponse(response); if (!response.ok) throw Error(data.error || 'Upload failed'); }
+      await draw(data); drop.classList.add('hidden'); $('sidePanel').style.display = 'block'; completed = true;
+    } catch (error) { alert(error.message); } finally { if (stopProgress) stopProgress(completed); $('loadingOverlay').style.display = 'none'; }
   }
-  $('modelSelect').onchange = () => { $('zipdepthControls').style.display = $('modelSelect').value === 'depth' ? 'block' : 'none'; $('midasTemporalControls').style.display = $('modelSelect').value === 'midas-v21-small-webgpu' ? 'block' : 'none'; if (activeFile) upload(activeFile); };
+  async function chooseLocalVideo() {
+    $('loadingOverlay').style.display = 'flex';
+    try {
+      const response = await fetch('/video/select-local', { method: 'POST' });
+      const data = await jsonResponse(response);
+      if (!response.ok) throw Error(data.error || 'Video selection failed');
+      activeFile = null;
+      if (mainVideo?.browserVideoUrl) URL.revokeObjectURL(mainVideo.browserVideoUrl);
+      mainVideo = { id: data.video_id, frameCount: data.frame_count, fps: data.fps, frame: 0, playing: false, processing: false, name: 'Local video', browserVideo: null, browserVideoUrl: null, edgeTamBox: null };
+      clearWorld(); $('executionProvider').textContent = 'Video pending'; $('meshResolution').textContent = `${data.width} Ã— ${data.height}`; updateVideoControls(); drop.classList.add('hidden'); $('sidePanel').style.display = 'block';
+      if ($('modelSelect').value === 'edgetam') $('loadingOverlay').style.display = 'none';
+      await processMainVideoFrame(0);
+    } catch (error) { alert(error.message); mainVideo = null; updateVideoControls(); }
+    finally { $('loadingOverlay').style.display = 'none'; }
+  }
+  let previousModel = $('modelSelect').value;
+  $('modelSelect').onchange = () => { const model = $('modelSelect').value; if (model === 'edgetam' && previousModel !== 'edgetam') { activeEdgeTamBox = null; if (mainVideo) mainVideo.edgeTamBox = null; } previousModel = model; $('zipdepthControls').style.display = model === 'depth' ? 'block' : 'none'; $('midasTemporalControls').style.display = model === 'midas-v21-small-webgpu' ? 'block' : 'none'; $('inpaintingControls').style.display = model === 'segmentation' || model === 'edgetam' ? 'block' : 'none'; if (mainVideo && !mainVideo.processing) processMainVideoFrame(mainVideo.frame); else if (activeFile) upload(activeFile); };
   $('modelSelect').onchange();
-  $('zipInputSize').onchange = () => { if (activeFile && $('modelSelect').value === 'depth') upload(activeFile); };
+  $('zipInputSize').onchange = () => { if ($('modelSelect').value !== 'depth') return; if (mainVideo && !mainVideo.processing) processMainVideoFrame(mainVideo.frame); else if (activeFile) upload(activeFile); };
+  $('inpaintingToggle').onchange = () => { if (mainVideo && !mainVideo.processing) processMainVideoFrame(mainVideo.frame); else if (activeFile) upload(activeFile); };
   drop.onclick = () => file.click(); file.onchange = e => upload(e.target.files[0]);
   drop.ondragover = e => { e.preventDefault(); drop.classList.add('dragover'); };
   drop.ondragleave = () => drop.classList.remove('dragover');
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove('dragover'); upload(e.dataTransfer.files[0]); };
   $('loadAnother').onclick = () => file.click();
+  $('chooseLocalVideo').onclick = e => { e.stopPropagation(); chooseLocalVideo(); };
+  $('chooseLocalVideoPanel').onclick = chooseLocalVideo;
   $('addRefLayer').onclick = () => $('refFileInput').click();
   $('refFileInput').onchange = e => addReference(e.target.files[0]);
   $('videoPlayStop').onclick = () => {
