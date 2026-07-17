@@ -10,6 +10,11 @@ err.txt
 flask_err*.txt
 flask_out*.txt
 logs/
+out.txt
+*_test_response.json
+
+# Local browser test profile
+.edge-check/
 
 # Local test and UI-capture artifacts
 shapes*.jpg
