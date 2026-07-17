@@ -1,0 +1,17 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Local application output
+*.log
+err.txt
+flask_err*.txt
+flask_out*.txt
+
+# Local test and UI-capture artifacts
+shapes*.jpg
+test_inpainted.jpg
+ui-check*.png
+
+# User-uploaded media
+uploads/
