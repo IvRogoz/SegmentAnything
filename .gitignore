@@ -15,3 +15,6 @@ ui-check*.png
 
 # User-uploaded media
 uploads/
+
+# Local agent instructions
+AGENTS.md
