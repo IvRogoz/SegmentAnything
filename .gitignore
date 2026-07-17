@@ -23,6 +23,10 @@ ui-check*.png
 uploads/
 *.mp4
 
+# Locally downloaded model weights
+*.pt
+*.onnx
+
 # Local agent instructions
 AGENTS.md
 **/AGENTS.md
